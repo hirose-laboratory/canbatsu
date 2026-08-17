@@ -1,0 +1,497 @@
+/* アプリ共通スタイル (Web開発でいう globals.css 相当) */
+
+/* 全ページのルート。日本語フォントと基本色をここで指定して子要素に継承させる */
+.root {
+    flex-grow: 1;
+    background-color: rgb(232, 232, 232);
+    -unity-font-definition: url("/Assets/Fonts/NotoSansJP-Regular.otf");
+    font-size: 15px;
+    color: rgb(20, 20, 20);
+}
+
+/* ---- レイヤー切替ボタン (Googleマップ左下と同じ、切替先の小さな地図プレビュー) ---- */
+/* 計画作成ページと記録ページで共用 */
+
+.map-layer-button {
+    position: absolute;
+    left: 16px;
+    bottom: 28px;
+    width: 58px;
+    height: 58px;
+    margin: 0;
+    padding: 0;
+    border-width: 2px;
+    border-color: rgb(255, 255, 255);
+    border-radius: 12px;
+    background-color: rgb(220, 220, 220);
+    overflow: hidden;
+}
+
+.map-layer-button:hover {
+    border-color: rgb(230, 230, 230);
+}
+
+.map-layer-button__image {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* プレビューの下に重ねるレイヤー名 */
+.map-layer-button__label {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    padding: 1px 0;
+    font-size: 10px;
+    color: rgb(255, 255, 255);
+    background-color: rgba(0, 0, 0, 0.45);
+    -unity-text-align: middle-center;
+}
+
+/* ---- 作業計画カード (予定ページで使用。生成はPlanCard.cs) ---- */
+
+.plan-card {
+    background-color: rgb(255, 255, 255);
+    border-width: 1px;
+    border-color: rgb(40, 40, 40);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 14px;
+}
+
+/* 今日の計画は緑の枠でハイライト */
+.plan-card--today {
+    border-width: 2px;
+    border-color: rgb(124, 194, 66);
+}
+
+/* 1行目: 日付 + 編集/削除アイコン */
+.plan-card__header {
+    flex-direction: row;
+    align-items: center;
+}
+
+.plan-card__date {
+    font-size: 16px;
+}
+
+/* タップで作業開始できるカード (今日の計画) */
+.plan-card--clickable:hover {
+    background-color: rgb(244, 250, 245);
+}
+
+.plan-card__start-hint {
+    font-size: 12px;
+    color: rgb(27, 152, 60);
+    -unity-font-style: bold;
+    -unity-text-align: middle-right;
+    margin-top: 8px;
+}
+
+.plan-card__species {
+    font-size: 12px;
+    color: rgb(27, 152, 60);
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-width: 1px;
+    border-color: rgb(27, 152, 60);
+    border-radius: 9px;
+}
+
+.plan-card__spacer {
+    flex-grow: 1;
+}
+
+/* 項目行 (間伐率・範囲・伐採間隔・伐採基準) */
+.plan-card__row {
+    flex-direction: row;
+    padding-left: 8px;
+    margin-top: 2px;
+}
+
+.plan-card__field {
+    font-size: 14px;
+    margin-right: 24px;
+}
+
+/* ---- カード右上のアイコンボタン (編集 / 削除) ---- */
+
+.plan-card__icon-button {
+    width: 24px;
+    height: 24px;
+    margin: 0;
+    margin-left: 8px;
+    padding: 0;
+    border-width: 0;
+    border-radius: 4px;
+    background-color: transparent;
+    justify-content: center;
+    align-items: center;
+}
+
+.plan-card__icon-button:hover {
+    background-color: rgb(235, 235, 235);
+}
+
+/* 編集アイコン: 四角い枠 + 斜めのペン (VisualElement+USSで描画する規約) */
+.plan-card__edit-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.plan-card__edit-frame {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    width: 13px;
+    height: 13px;
+    border-width: 2px;
+    border-color: rgb(20, 20, 20);
+    border-radius: 2px;
+}
+
+.plan-card__edit-pencil {
+    position: absolute;
+    right: -1px;
+    top: 3px;
+    width: 12px;
+    height: 3px;
+    border-radius: 1px;
+    background-color: rgb(20, 20, 20);
+    rotate: -45deg;
+}
+
+/* 削除(ゴミ箱)アイコン */
+.plan-card__trash-icon {
+    width: 18px;
+    height: 18px;
+    align-items: center;
+}
+
+.plan-card__trash-handle {
+    width: 6px;
+    height: 2px;
+    background-color: rgb(20, 20, 20);
+}
+
+.plan-card__trash-lid {
+    width: 14px;
+    height: 2px;
+    margin-top: 1px;
+    background-color: rgb(20, 20, 20);
+}
+
+.plan-card__trash-body {
+    width: 10px;
+    height: 11px;
+    margin-top: 1px;
+    background-color: rgb(20, 20, 20);
+    border-bottom-left-radius: 2px;
+    border-bottom-right-radius: 2px;
+}
+
+/* ---- 計画入力フォーム (計画作成シート/編集ダイアログで共用。生成はPlanFormView.cs) ---- */
+
+.plan-form__row {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding: 7px 0;
+    border-bottom-width: 1px;
+    border-bottom-color: rgb(238, 238, 238);
+}
+
+.plan-form__key {
+    font-size: 14px;
+    color: rgb(120, 120, 120);
+}
+
+.plan-form__value {
+    font-size: 14px;
+    -unity-font-style: bold;
+}
+
+/* 樹種の選択チップ */
+.plan-form__chips {
+    flex-direction: row;
+}
+
+.plan-form__chip {
+    margin: 0 0 0 6px;
+    padding: 3px 10px;
+    border-width: 1px;
+    border-color: rgb(200, 200, 200);
+    border-radius: 13px;
+    background-color: rgb(255, 255, 255);
+    color: rgb(80, 80, 80);
+    font-size: 12px;
+}
+
+.plan-form__chip--selected {
+    border-color: rgb(27, 152, 60);
+    background-color: rgb(27, 152, 60);
+    color: rgb(255, 255, 255);
+}
+
+/* 数値入力 (半角のみ。suffixは単位表示) */
+.plan-form__input-group {
+    flex-direction: row;
+    align-items: center;
+}
+
+.plan-form__input {
+    width: 72px;
+    margin: 0;
+}
+
+.plan-form__input > .unity-base-text-field__input {
+    padding: 4px 8px;
+    border-radius: 6px;
+    border-color: rgb(200, 200, 200);
+    background-color: rgb(255, 255, 255);
+    -unity-text-align: middle-right;
+    font-size: 14px;
+}
+
+.plan-form__suffix {
+    font-size: 13px;
+    color: rgb(120, 120, 120);
+    margin-left: 4px;
+}
+
+/* 実施日ボタン (タップでカレンダーを開く) */
+.plan-form__date-button {
+    margin: 0;
+    padding: 4px 12px;
+    border-width: 1px;
+    border-color: rgb(200, 200, 200);
+    border-radius: 6px;
+    background-color: rgb(255, 255, 255);
+    color: rgb(20, 20, 20);
+    font-size: 14px;
+    -unity-font-style: bold;
+}
+
+.plan-form__date-button:hover {
+    background-color: rgb(244, 250, 245);
+}
+
+/* ---- カレンダーポップアップ (生成はCalendarPopup.cs) ---- */
+
+.calendar__scrim {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.45);
+    justify-content: center;
+    padding-left: 24px;
+    padding-right: 24px;
+}
+
+.calendar {
+    background-color: rgb(255, 255, 255);
+    border-radius: 16px;
+    padding: 14px;
+}
+
+.calendar__header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 6px;
+}
+
+.calendar__title {
+    font-size: 16px;
+    -unity-font-style: bold;
+}
+
+.calendar__nav {
+    width: 36px;
+    height: 36px;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 18px;
+    background-color: transparent;
+    justify-content: center;
+    align-items: center;
+}
+
+.calendar__nav:hover {
+    background-color: rgb(240, 240, 240);
+}
+
+/* くの字アイコン (VisualElement+USSで描画する規約) */
+.calendar__nav-icon {
+    width: 14px;
+    height: 14px;
+}
+
+.calendar__nav-icon--right {
+    rotate: 180deg;
+}
+
+.calendar__nav-bar {
+    position: absolute;
+    left: 2px;
+    width: 10px;
+    height: 2px;
+    border-radius: 1px;
+    background-color: rgb(60, 60, 60);
+}
+
+.calendar__nav-bar--up {
+    top: 3px;
+    rotate: -35deg;
+}
+
+.calendar__nav-bar--down {
+    top: 9px;
+    rotate: 35deg;
+}
+
+.calendar__week {
+    flex-direction: row;
+}
+
+.calendar__weekday {
+    flex-grow: 1;
+    flex-basis: 0;
+    padding: 4px 0;
+    font-size: 11px;
+    color: rgb(150, 150, 150);
+    -unity-text-align: middle-center;
+}
+
+.calendar__day {
+    flex-grow: 1;
+    flex-basis: 0;
+    height: 40px;
+    margin: 1px;
+    padding: 0;
+    border-width: 0;
+    border-radius: 20px;
+    background-color: transparent;
+    color: rgb(20, 20, 20);
+    font-size: 14px;
+}
+
+.calendar__day:hover {
+    background-color: rgb(240, 240, 240);
+}
+
+/* 表示中の月以外の日は薄く */
+.calendar__day--other {
+    color: rgb(195, 195, 195);
+}
+
+.calendar__day--today {
+    border-width: 1px;
+    border-color: rgb(124, 194, 66);
+}
+
+.calendar__day--selected {
+    background-color: rgb(27, 152, 60);
+    color: rgb(255, 255, 255);
+}
+
+/* ---- 共通の緑ボタン ---- */
+
+.button-primary {
+    height: 52px;
+    border-width: 0;
+    border-radius: 8px;
+    background-color: rgb(27, 152, 60);
+    color: rgb(255, 255, 255);
+    font-size: 18px;
+    -unity-font-style: bold;
+}
+
+.button-primary:hover {
+    background-color: rgb(23, 130, 51);
+}
+
+.button-primary:active {
+    background-color: rgb(19, 108, 43);
+}
+
+/* ---- 共通の確認ダイアログ (作業終了・記録削除など) ---- */
+
+/* 画面全体を暗くする幕 */
+.dialog-scrim {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.45);
+    justify-content: center;
+    padding-left: 28px;
+    padding-right: 28px;
+    display: none;
+}
+
+.dialog {
+    background-color: rgb(255, 255, 255);
+    border-radius: 16px;
+    padding: 20px;
+}
+
+.dialog__title {
+    font-size: 18px;
+    -unity-font-style: bold;
+    margin-bottom: 10px;
+}
+
+.dialog__note {
+    font-size: 11px;
+    color: rgb(130, 130, 130);
+    white-space: normal;
+    margin-bottom: 14px;
+}
+
+.dialog__buttons {
+    flex-direction: row;
+}
+
+.dialog__cancel {
+    flex-grow: 1;
+    flex-basis: 0;
+    height: 46px;
+    margin: 0 8px 0 0;
+    border-width: 1px;
+    border-color: rgb(180, 180, 180);
+    border-radius: 8px;
+    background-color: rgb(255, 255, 255);
+    color: rgb(80, 80, 80);
+    font-size: 14px;
+}
+
+/* button-primaryと組み合わせて使う (サイズ調整のみ) */
+.dialog__confirm {
+    flex-grow: 1;
+    flex-basis: 0;
+    height: 46px;
+    margin: 0;
+    font-size: 15px;
+}
+
+/* 削除など危険な操作の確定ボタン (button-primaryの緑を赤で上書き) */
+.dialog__danger {
+    background-color: rgb(200, 60, 50);
+}
+
+.dialog__danger:hover {
+    background-color: rgb(172, 50, 42);
+}
+
+.dialog__danger:active {
+    background-color: rgb(148, 42, 35);
+}

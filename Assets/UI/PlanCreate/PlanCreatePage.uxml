@@ -1,0 +1,66 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements">
+    <Style src="/Assets/UI/Common/Common.uss" />
+    <Style src="/Assets/UI/PlanCreate/PlanCreatePage.uss" />
+    <!-- 作業計画の新規作成ページ。地図で範囲を選択→AIが基準を自動算出(今はモック) -->
+    <ui:VisualElement name="plan-create" class="plan-create">
+
+        <!-- 地図本体 (MapViewをC#からここに差し込む) -->
+        <ui:VisualElement name="map-container" class="plan-create__map" />
+
+        <!-- 上部: 戻るボタン + 操作ガイド (Googleマップの検索バー風) -->
+        <ui:VisualElement name="top-bar" class="plan-create__top-bar">
+            <ui:Button name="back-button" class="plan-create__round-button">
+                <ui:VisualElement class="plan-create__back-icon">
+                    <ui:VisualElement class="plan-create__back-bar plan-create__back-bar--up" />
+                    <ui:VisualElement class="plan-create__back-bar plan-create__back-bar--down" />
+                </ui:VisualElement>
+            </ui:Button>
+            <ui:VisualElement class="plan-create__instruction">
+                <ui:Label text="地図をタップして間伐範囲を囲む" class="plan-create__instruction-title" />
+                <ui:Label name="instruction-sub" text="頂点を3つ以上置くと確定できます" class="plan-create__instruction-sub" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- 頂点を戻すボタン (ガイドの下) -->
+        <ui:Button name="undo-button" text="頂点を1つ戻す" class="plan-create__undo-button" />
+
+        <!-- 右側: ズームボタン (Googleマップ風) -->
+        <ui:VisualElement class="plan-create__side-controls">
+            <ui:VisualElement class="plan-create__zoom-group">
+                <ui:Button name="zoom-in-button" class="plan-create__zoom-button">
+                    <ui:VisualElement class="plan-create__zoom-icon plan-create__zoom-icon--horizontal" />
+                    <ui:VisualElement class="plan-create__zoom-icon plan-create__zoom-icon--vertical" />
+                </ui:Button>
+                <ui:VisualElement class="plan-create__zoom-divider" />
+                <ui:Button name="zoom-out-button" class="plan-create__zoom-button">
+                    <ui:VisualElement class="plan-create__zoom-icon plan-create__zoom-icon--horizontal" />
+                </ui:Button>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- 左下: レイヤー切替 (Googleマップと同じ、切替先地図の小さなプレビュー) -->
+        <ui:Button name="layer-button" class="map-layer-button">
+            <ui:Image name="layer-thumb-image" class="map-layer-button__image" scale-mode="scale-and-crop" />
+            <ui:Label name="layer-thumb-label" text="地図" class="map-layer-button__label" />
+        </ui:Button>
+
+        <!-- 確定ボタン -->
+        <ui:Button name="confirm-button" text="この範囲で計画を作成" class="button-primary plan-create__confirm-button" />
+
+        <!-- 出典表示 (利用規約上必須。地図=地理院タイル、地名=CARTO/OSM) -->
+        <ui:Label text="地図: 国土地理院 ・ 地名: © OpenStreetMap contributors © CARTO" class="plan-create__attribution" />
+
+        <!-- 確定後に出る結果シート (Googleマップの下部シート風)。中身はPlanFormView.csが組み立てる -->
+        <ui:VisualElement name="result-sheet" class="plan-create__sheet">
+            <ui:VisualElement class="plan-create__sheet-handle" />
+            <ui:Label text="作業計画" class="plan-create__sheet-title" />
+            <ui:Label name="result-caption" text="推定値が入っています。手動でも修正できます" class="plan-create__sheet-caption" />
+            <ui:VisualElement name="plan-form" />
+            <ui:VisualElement class="plan-create__sheet-buttons">
+                <ui:Button name="cancel-button" text="範囲を修正" class="plan-create__sheet-cancel" />
+                <ui:Button name="save-button" text="保存する" class="button-primary plan-create__sheet-save" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+    </ui:VisualElement>
+</ui:UXML>

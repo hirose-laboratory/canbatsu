@@ -1,0 +1,13 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements">
+    <Style src="/Assets/UI/Common/Common.uss" />
+    <Style src="/Assets/UI/Login/LoginPage.uss" />
+    <ui:VisualElement name="login" class="root login">
+        <ui:VisualElement class="login__logo" />
+        <ui:Label text="間伐作業支援アプリ" class="login__subtitle" />
+        <ui:TextField name="user-id-field" label="ユーザー名" class="login__field" />
+        <ui:TextField name="password-field" label="パスワード" password="true" class="login__field" />
+        <ui:Label name="status-label" text="" class="login__status" />
+        <ui:Button name="login-button" text="ログイン" class="login__button" />
+        <ui:Button name="register-button" text="新規登録" class="login__register-button" />
+    </ui:VisualElement>
+</ui:UXML>

@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "219360415007",
+    "project_id": "can-batsu",
+    "storage_bucket": "can-batsu.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:219360415007:android:9b21bde4cf4f5f97e0b42a",
+        "android_client_info": {
+          "package_name": "com.p2026.procon"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAJ44hvVimBZ3myBKe1osmAQuyZjRqKXnM"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

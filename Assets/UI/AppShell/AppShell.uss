@@ -1,0 +1,172 @@
+/* アプリの骨格 (ヘッダー / コンテンツ / 下部タブバー) のスタイル */
+
+.app-shell {
+    flex-grow: 1;
+}
+
+/* ---- ヘッダー (白地に黒ロゴ、下に区切り線) ---- */
+
+.app-shell__header {
+    height: 56px;
+    background-color: rgb(255, 255, 255);
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    padding-left: 16px;
+    padding-right: 8px;
+    border-bottom-width: 2px;
+    border-bottom-color: rgb(40, 40, 40);
+}
+
+/* ロゴ画像 (PDF表紙から抽出した手書き風「CAN伐」) */
+.app-shell__header-logo {
+    width: 104px;
+    height: 39px;
+    background-image: url("/Assets/Sprites/CanbatsuLogo.png");
+    background-size: contain;
+    background-repeat: no-repeat;
+    background-position-x: left;
+    background-position-y: center;
+}
+
+/* ---- 三本線メニューボタン (ヘッダー右端) ---- */
+
+.app-shell__menu-button {
+    width: 44px;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 22px;
+    background-color: transparent;
+    justify-content: center;
+    align-items: center;
+}
+
+.app-shell__menu-button:hover {
+    background-color: rgb(240, 240, 240);
+}
+
+/* 三本線アイコン (バー3本を等間隔に並べる) */
+.app-shell__menu-icon {
+    width: 20px;
+    height: 14px;
+    justify-content: space-between;
+}
+
+.app-shell__menu-bar {
+    height: 2px;
+    border-radius: 1px;
+    background-color: rgb(40, 40, 40);
+}
+
+/* ---- メニューのドロップダウン (ヘッダー下の右上に出す) ---- */
+
+.app-shell__menu-overlay {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    background-color: rgba(0, 0, 0, 0.15);
+    align-items: flex-end;
+    padding-top: 58px;
+    padding-right: 8px;
+    display: none;
+}
+
+.app-shell__menu {
+    min-width: 180px;
+    background-color: rgb(255, 255, 255);
+    border-width: 1px;
+    border-color: rgb(210, 210, 210);
+    border-radius: 12px;
+    padding: 6px 0;
+}
+
+/* メニューの項目 (今後増える想定。左寄せテキストの行ボタン) */
+.app-shell__menu-item {
+    height: 46px;
+    margin: 0;
+    padding: 0 18px;
+    border-width: 0;
+    border-radius: 0;
+    background-color: transparent;
+    color: rgb(20, 20, 20);
+    font-size: 14px;
+    -unity-text-align: middle-left;
+}
+
+.app-shell__menu-item:hover {
+    background-color: rgb(244, 250, 245);
+}
+
+/* ---- トースト (音声コマンドの結果などを一時表示) ---- */
+
+.app-shell__voice-toast {
+    position: absolute;
+    left: 24px;
+    right: 24px;
+    bottom: 76px;
+    padding: 8px 18px;
+    border-radius: 18px;
+    background-color: rgba(30, 30, 30, 0.85);
+    color: rgb(255, 255, 255);
+    font-size: 13px;
+    white-space: normal;
+    -unity-text-align: middle-center;
+    display: none;
+}
+
+/* ---- コンテンツ (各ページの差し込み先) ---- */
+
+.app-shell__content {
+    flex-grow: 1;
+}
+
+/* ---- 下部タブバー (予定 / 記録 の2タブ) ---- */
+
+.app-shell__tab-bar {
+    flex-direction: row;
+    height: 60px;
+    background-color: rgb(255, 255, 255);
+    border-top-width: 1px;
+    border-top-color: rgb(180, 180, 180);
+}
+
+/* Buttonのデフォルト見た目を打ち消してタブらしくする */
+.app-shell__tab {
+    flex-grow: 1;
+    flex-basis: 0;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 0;
+    background-color: transparent;
+    justify-content: center;
+    align-items: center;
+}
+
+/* ラベルの上の小さなバー (画像ではなくVisualElement+USSで描画する規約) */
+.app-shell__tab-indicator {
+    width: 40px;
+    height: 6px;
+    border-radius: 3px;
+    background-color: rgb(190, 190, 190);
+    margin-bottom: 4px;
+}
+
+.app-shell__tab-label {
+    font-size: 14px;
+    color: rgb(20, 20, 20);
+}
+
+/* ---- 選択中タブ ---- */
+
+.app-shell__tab--active .app-shell__tab-indicator {
+    background-color: rgb(27, 152, 60);
+}
+
+.app-shell__tab--active .app-shell__tab-label {
+    -unity-font-style: bold;
+}

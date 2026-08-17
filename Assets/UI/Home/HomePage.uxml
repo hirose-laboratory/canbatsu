@@ -1,0 +1,60 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements">
+    <Style src="/Assets/UI/Common/Common.uss" />
+    <Style src="/Assets/UI/Home/HomePage.uss" />
+    <!-- 予定ページ。計画の有無で「空の状態」と「一覧」を切り替える (切替はHomePageControllerのRefresh) -->
+    <ui:VisualElement name="home" class="home">
+
+        <!-- 計画が1件もないときの表示 -->
+        <ui:VisualElement name="empty-state" class="home__empty">
+            <ui:VisualElement class="home__empty-icon">
+                <ui:VisualElement class="home__empty-icon-frame" />
+                <ui:VisualElement class="home__empty-icon-bar home__empty-icon-bar--horizontal" />
+                <ui:VisualElement class="home__empty-icon-bar home__empty-icon-bar--vertical" />
+            </ui:VisualElement>
+            <ui:Label text="現在予定はありません" class="home__empty-title" />
+            <ui:Label text="作業を始めるには、作業計画が必要です" class="home__empty-subtitle" />
+            <ui:Button name="create-plan-button" text="作業計画を新規作成" class="button-primary home__create-button" />
+        </ui:VisualElement>
+
+        <!-- 計画があるときの一覧表示 -->
+        <ui:ScrollView name="plan-sections" class="home__sections">
+            <ui:Label name="today-section-title" text="今日の作業計画" class="home__section-title" />
+            <ui:VisualElement name="today-plan-list" class="home__section-list" />
+            <ui:Label name="future-section-title" text="今後の作業計画" class="home__section-title" />
+            <ui:VisualElement name="future-plan-list" class="home__section-list" />
+        </ui:ScrollView>
+
+        <!-- 右下のフローティング追加ボタン (一覧表示のときだけ表示) -->
+        <ui:Button name="add-plan-button" class="home__add-button">
+            <ui:VisualElement class="home__add-icon home__add-icon--horizontal" />
+            <ui:VisualElement class="home__add-icon home__add-icon--vertical" />
+        </ui:Button>
+
+        <!-- 作業開始の確認ダイアログ (今日の計画カードをタップで表示) -->
+        <ui:VisualElement name="start-dialog" class="home__dialog-scrim">
+            <ui:VisualElement class="home__dialog">
+                <ui:Label text="作業を開始しますか?" class="home__dialog-title" />
+                <ui:VisualElement name="dialog-rows" class="home__dialog-rows" />
+                <ui:Label text="開始するとARグラス連携モードに切り替わります (完全オフラインで動作)" class="home__dialog-note" />
+                <ui:VisualElement class="home__dialog-buttons">
+                    <ui:Button name="dialog-cancel-button" text="キャンセル" class="home__dialog-cancel" />
+                    <ui:Button name="dialog-start-button" text="作業開始" class="button-primary home__dialog-start" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- 計画の編集ダイアログ (カードの編集アイコンで表示。中身はPlanFormView.csが組み立てる) -->
+        <ui:VisualElement name="edit-dialog" class="home__dialog-scrim">
+            <ui:VisualElement class="home__dialog">
+                <ui:Label text="計画を編集" class="home__dialog-title" />
+                <ui:VisualElement name="edit-form" />
+                <ui:Button name="edit-range-button" text="範囲を地図で再設定" class="home__dialog-range" />
+                <ui:VisualElement class="home__dialog-buttons">
+                    <ui:Button name="edit-cancel-button" text="キャンセル" class="home__dialog-cancel" />
+                    <ui:Button name="edit-save-button" text="保存" class="button-primary home__dialog-start" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+    </ui:VisualElement>
+</ui:UXML>

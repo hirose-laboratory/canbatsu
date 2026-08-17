@@ -1,0 +1,40 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements">
+    <Style src="/Assets/UI/Common/Common.uss" />
+    <Style src="/Assets/UI/AppShell/AppShell.uss" />
+    <!-- アプリ全体の骨格 (Next.jsでいう layout.tsx)。各ページは #content に差し込まれる -->
+    <ui:VisualElement name="root" class="root app-shell">
+        <ui:VisualElement name="header" class="app-shell__header">
+            <ui:VisualElement name="header-logo" class="app-shell__header-logo" />
+            <!-- 三本線メニュー (アイコンはVisualElement+USSで描画する規約) -->
+            <ui:Button name="menu-button" class="app-shell__menu-button">
+                <ui:VisualElement class="app-shell__menu-icon">
+                    <ui:VisualElement class="app-shell__menu-bar" />
+                    <ui:VisualElement class="app-shell__menu-bar" />
+                    <ui:VisualElement class="app-shell__menu-bar" />
+                </ui:VisualElement>
+            </ui:Button>
+        </ui:VisualElement>
+        <ui:VisualElement name="content" class="app-shell__content" />
+        <ui:VisualElement name="tab-bar" class="app-shell__tab-bar">
+            <ui:Button name="tab-schedule" class="app-shell__tab">
+                <ui:VisualElement class="app-shell__tab-indicator" />
+                <ui:Label text="予定" class="app-shell__tab-label" />
+            </ui:Button>
+            <ui:Button name="tab-record" class="app-shell__tab">
+                <ui:VisualElement class="app-shell__tab-indicator" />
+                <ui:Label text="記録" class="app-shell__tab-label" />
+            </ui:Button>
+        </ui:VisualElement>
+
+        <!-- 三本線メニューのドロップダウン (メニューボタンで開閉。外側タップで閉じる) -->
+        <ui:VisualElement name="menu-overlay" class="app-shell__menu-overlay">
+            <ui:VisualElement class="app-shell__menu">
+                <ui:Button name="menu-voice-button" text="音声認識: オフ" class="app-shell__menu-item" />
+                <ui:Button name="menu-logout-button" text="ログアウト" class="app-shell__menu-item" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- 音声コマンドの認識結果などを一時表示するトースト -->
+        <ui:Label name="voice-toast" text="" class="app-shell__voice-toast" />
+    </ui:VisualElement>
+</ui:UXML>

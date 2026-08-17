@@ -1,0 +1,246 @@
+/* 記録ページのスタイル (予定/記録の範囲を地図に色分け表示) */
+
+.record {
+    flex-grow: 1;
+}
+
+.record__map {
+    position: absolute;
+    left: 0;
+    top: 0;
+    right: 0;
+    bottom: 0;
+}
+
+/* ---- 凡例 (左上の白いカード) ---- */
+
+.record__legend {
+    position: absolute;
+    top: 12px;
+    left: 12px;
+    padding: 8px 14px;
+    background-color: rgb(255, 255, 255);
+    border-width: 1px;
+    border-color: rgb(200, 200, 200);
+    border-radius: 12px;
+}
+
+.record__legend-row {
+    flex-direction: row;
+    align-items: center;
+    margin: 2px 0;
+}
+
+.record__legend-swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    margin-right: 8px;
+    border-width: 2px;
+}
+
+/* 予定 = テーマ緑 */
+.record__legend-swatch--plan {
+    background-color: rgba(27, 152, 60, 0.35);
+    border-color: rgb(27, 152, 60);
+}
+
+/* 記録 = オレンジ (航空写真の緑の上でも見やすい) */
+.record__legend-swatch--record {
+    background-color: rgba(240, 140, 0, 0.35);
+    border-color: rgb(240, 140, 0);
+}
+
+.record__legend-label {
+    font-size: 12px;
+}
+
+/* ---- 右側ズームコントロール (計画作成ページと同じ見た目) ---- */
+
+.record__side-controls {
+    position: absolute;
+    right: 12px;
+    bottom: 110px;
+    align-items: flex-end;
+}
+
+.record__zoom-group {
+    width: 44px;
+    background-color: rgb(255, 255, 255);
+    border-width: 1px;
+    border-color: rgb(200, 200, 200);
+    border-radius: 22px;
+}
+
+.record__zoom-button {
+    width: 42px;
+    height: 44px;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 21px;
+    background-color: transparent;
+    justify-content: center;
+    align-items: center;
+}
+
+.record__zoom-button:hover {
+    background-color: rgb(240, 240, 240);
+}
+
+.record__zoom-divider {
+    height: 1px;
+    margin-left: 8px;
+    margin-right: 8px;
+    background-color: rgb(220, 220, 220);
+}
+
+.record__zoom-icon {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 16px;
+    height: 3px;
+    border-radius: 1.5px;
+    background-color: rgb(60, 60, 60);
+    translate: -50% -50%;
+}
+
+.record__zoom-icon--vertical {
+    rotate: 90deg;
+}
+
+/* ---- 範囲タップの詳細ポップアップ (Googleマップの場所カード風) ---- */
+
+.record__info-card {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    bottom: 12px;
+    padding: 12px 16px 14px 16px;
+    background-color: rgb(255, 255, 255);
+    border-width: 1px;
+    border-color: rgb(210, 210, 210);
+    border-radius: 16px;
+    display: none;
+}
+
+.record__info-header {
+    flex-direction: row;
+    align-items: center;
+    margin-bottom: 6px;
+}
+
+/* 予定/記録の種別バッジ (色はControllerがモディファイアクラスで切替) */
+.record__info-badge {
+    font-size: 11px;
+    color: rgb(255, 255, 255);
+    padding: 2px 10px;
+    border-radius: 10px;
+    margin-right: 8px;
+    background-color: rgb(150, 150, 150);
+}
+
+.record__info-badge--plan {
+    background-color: rgb(27, 152, 60);
+}
+
+.record__info-badge--record {
+    background-color: rgb(240, 140, 0);
+}
+
+.record__info-title {
+    font-size: 16px;
+    -unity-font-style: bold;
+}
+
+.record__info-spacer {
+    flex-grow: 1;
+}
+
+/* 閉じるボタン (×をバー2本で描画) */
+.record__info-close {
+    width: 28px;
+    height: 28px;
+    margin: 0;
+    padding: 0;
+    border-width: 0;
+    border-radius: 14px;
+    background-color: rgb(240, 240, 240);
+    justify-content: center;
+    align-items: center;
+}
+
+.record__info-close:hover {
+    background-color: rgb(225, 225, 225);
+}
+
+.record__info-close-bar {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 14px;
+    height: 2px;
+    border-radius: 1px;
+    background-color: rgb(90, 90, 90);
+    translate: -50% -50%;
+}
+
+.record__info-close-bar--a {
+    rotate: 45deg;
+}
+
+.record__info-close-bar--b {
+    rotate: -45deg;
+}
+
+.record__info-rows {
+}
+
+.record__info-row {
+    flex-direction: row;
+    justify-content: space-between;
+    padding: 5px 0;
+    border-bottom-width: 1px;
+    border-bottom-color: rgb(240, 240, 240);
+}
+
+.record__info-key {
+    font-size: 13px;
+    color: rgb(120, 120, 120);
+}
+
+.record__info-value {
+    font-size: 13px;
+    -unity-font-style: bold;
+}
+
+/* 記録の削除ボタン (作業記録のカードだけに表示) */
+.record__info-delete {
+    height: 40px;
+    margin: 10px 0 0 0;
+    border-width: 1px;
+    border-color: rgb(210, 90, 80);
+    border-radius: 8px;
+    background-color: rgb(255, 255, 255);
+    color: rgb(200, 60, 50);
+    font-size: 13px;
+    display: none;
+}
+
+.record__info-delete:hover {
+    background-color: rgb(253, 243, 242);
+}
+
+/* ---- 出典表示 ---- */
+
+.record__attribution {
+    position: absolute;
+    right: 6px;
+    bottom: 4px;
+    padding: 2px 8px;
+    font-size: 10px;
+    color: rgb(60, 60, 60);
+    background-color: rgba(255, 255, 255, 0.75);
+    border-radius: 8px;
+}

@@ -1,0 +1,44 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements">
+    <Style src="/Assets/UI/Common/Common.uss" />
+    <Style src="/Assets/UI/Working/WorkingPage.uss" />
+    <!-- 作業中ページ (ARグラス連携モード)。スマホはオフラインでAI/AR処理に専念する想定 -->
+    <ui:VisualElement name="working" class="working">
+
+        <!-- 本文 (paddingはこちらに持たせ、ダイアログの幕が画面端まで覆えるようにする) -->
+        <ui:VisualElement class="working__body">
+
+            <ui:VisualElement class="working__logo" />
+
+            <!-- 動作中を示すパルスアイコン (Controllerがアニメーションさせる) -->
+            <ui:VisualElement class="working__pulse-area">
+                <ui:VisualElement name="pulse-ring" class="working__pulse-ring" />
+                <ui:VisualElement class="working__pulse-core" />
+            </ui:VisualElement>
+
+            <ui:Label text="作業中" class="working__title" />
+            <ui:Label text="ARグラスと連携して選木情報を表示しています" class="working__subtitle" />
+
+            <!-- 実施中の計画の概要 -->
+            <ui:VisualElement name="plan-summary" class="working__card" />
+
+            <ui:Label text="アプリを閉じずにこのままお使いください" class="working__note" />
+
+            <ui:Button name="finish-button" text="作業を終了する" class="working__finish-button" />
+
+        </ui:VisualElement>
+
+        <!-- 作業終了の確認ダイアログ (誤タップ防止) -->
+        <ui:VisualElement name="finish-dialog" class="dialog-scrim">
+            <ui:VisualElement class="dialog">
+                <ui:Label text="作業を終了しますか?" class="dialog__title" />
+                <ui:Label text="終了すると今日の予定から外れ、記録ページに作業記録として保存されます"
+                          class="dialog__note" />
+                <ui:VisualElement class="dialog__buttons">
+                    <ui:Button name="finish-cancel-button" text="キャンセル" class="dialog__cancel" />
+                    <ui:Button name="finish-confirm-button" text="終了する" class="button-primary dialog__confirm" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+    </ui:VisualElement>
+</ui:UXML>

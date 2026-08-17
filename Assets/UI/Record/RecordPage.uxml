@@ -1,0 +1,75 @@
+<ui:UXML xmlns:ui="UnityEngine.UIElements" xmlns:uie="UnityEditor.UIElements">
+    <Style src="/Assets/UI/Common/Common.uss" />
+    <Style src="/Assets/UI/Record/RecordPage.uss" />
+    <!-- 記録ページ。予定と過去の作業記録の範囲を地図上に色分け表示する -->
+    <ui:VisualElement name="record" class="record">
+
+        <!-- 地図本体 (MapViewをC#からここに差し込む) -->
+        <ui:VisualElement name="map-container" class="record__map" />
+
+        <!-- 凡例 (色分けの説明) -->
+        <ui:VisualElement class="record__legend">
+            <ui:VisualElement class="record__legend-row">
+                <ui:VisualElement class="record__legend-swatch record__legend-swatch--plan" />
+                <ui:Label name="legend-plan-label" text="予定" class="record__legend-label" />
+            </ui:VisualElement>
+            <ui:VisualElement class="record__legend-row">
+                <ui:VisualElement class="record__legend-swatch record__legend-swatch--record" />
+                <ui:Label name="legend-record-label" text="作業記録" class="record__legend-label" />
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- 右側: ズームボタン -->
+        <ui:VisualElement class="record__side-controls">
+            <ui:VisualElement class="record__zoom-group">
+                <ui:Button name="zoom-in-button" class="record__zoom-button">
+                    <ui:VisualElement class="record__zoom-icon record__zoom-icon--horizontal" />
+                    <ui:VisualElement class="record__zoom-icon record__zoom-icon--vertical" />
+                </ui:Button>
+                <ui:VisualElement class="record__zoom-divider" />
+                <ui:Button name="zoom-out-button" class="record__zoom-button">
+                    <ui:VisualElement class="record__zoom-icon record__zoom-icon--horizontal" />
+                </ui:Button>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+        <!-- 左下: レイヤー切替 (Googleマップ風プレビュー) -->
+        <ui:Button name="layer-button" class="map-layer-button">
+            <ui:Image name="layer-thumb-image" class="map-layer-button__image" scale-mode="scale-and-crop" />
+            <ui:Label name="layer-thumb-label" text="地図" class="map-layer-button__label" />
+        </ui:Button>
+
+        <!-- 出典表示 (利用規約上必須。地図=地理院タイル、地名=CARTO/OSM) -->
+        <ui:Label text="地図: 国土地理院 ・ 地名: © OpenStreetMap contributors © CARTO" class="record__attribution" />
+
+        <!-- 範囲タップで出る詳細ポップアップ (Googleマップの場所カード風)。中身はControllerが入れる -->
+        <ui:VisualElement name="info-card" class="record__info-card">
+            <ui:VisualElement class="record__info-header">
+                <ui:Label name="info-badge" text="予定" class="record__info-badge" />
+                <ui:Label name="info-title" text="-" class="record__info-title" />
+                <ui:VisualElement class="record__info-spacer" />
+                <ui:Button name="info-close-button" class="record__info-close">
+                    <ui:VisualElement class="record__info-close-bar record__info-close-bar--a" />
+                    <ui:VisualElement class="record__info-close-bar record__info-close-bar--b" />
+                </ui:Button>
+            </ui:VisualElement>
+            <ui:VisualElement name="info-rows" class="record__info-rows" />
+            <!-- 作業記録のときだけ表示 (Controllerが切替) -->
+            <ui:Button name="info-delete-button" text="この記録を削除" class="record__info-delete" />
+        </ui:VisualElement>
+
+        <!-- 記録削除の確認ダイアログ -->
+        <ui:VisualElement name="delete-dialog" class="dialog-scrim">
+            <ui:VisualElement class="dialog">
+                <ui:Label text="この記録を削除しますか?" class="dialog__title" />
+                <ui:Label text="削除した作業記録は元に戻せません" class="dialog__note" />
+                <ui:VisualElement class="dialog__buttons">
+                    <ui:Button name="delete-cancel-button" text="キャンセル" class="dialog__cancel" />
+                    <ui:Button name="delete-confirm-button" text="削除する"
+                               class="button-primary dialog__confirm dialog__danger" />
+                </ui:VisualElement>
+            </ui:VisualElement>
+        </ui:VisualElement>
+
+    </ui:VisualElement>
+</ui:UXML>
