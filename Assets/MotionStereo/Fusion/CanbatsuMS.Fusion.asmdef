@@ -1,0 +1,18 @@
+{
+    "name": "CanbatsuMS.Fusion",
+    "rootNamespace": "CanbatsuMS",
+    "references": [
+        "CanbatsuMS"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [
+        "CANBATSU_TREEDISTANCE"
+    ],
+    "versionDefines": [],
+    "noEngineReferences": false
+}

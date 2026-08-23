@@ -18,6 +18,10 @@
             <ui:Label text="作業中" class="working__title" />
             <ui:Label text="ARグラスと連携して選木情報を表示しています" class="working__subtitle" />
 
+            <!-- XREAL Eyeカメラのプレビュー (映像はEyeCameraServiceが供給。中のImageはControllerが生成) -->
+            <ui:VisualElement name="eye-preview" class="working__eye-preview" />
+            <ui:Label name="eye-status" text="カメラ停止中" class="working__eye-status" />
+
             <!-- 実施中の計画の概要 -->
             <ui:VisualElement name="plan-summary" class="working__card" />
 

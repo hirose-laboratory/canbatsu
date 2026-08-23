@@ -111,3 +111,9 @@ InitTestScene*.unity*
 /[Aa]ssets/Firebase/Plugins/x86_64/*.bundle.meta
 /[Aa]ssets/Firebase/Plugins/x86_64/*.so
 /[Aa]ssets/Firebase/Plugins/x86_64/*.so.meta
+
+# ドキュメント(MD)はリポジトリに含めない。実体は D:\kaihatu\GitHub\docsmd
+/docs/
+/CLAUDE.md
+/Assets/MotionStereo/*.md
+/Assets/MotionStereo/*.md.meta
