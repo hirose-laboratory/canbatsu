@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using CanbatsuMS;
 using UnityEngine;
 using UnityEngine.InputSystem;
@@ -5,75 +6,138 @@ using UnityEngine.InputSystem.XR;
 using UnityEngine.Rendering.Universal;
 
 /// <summary>
-/// AR表示の雛形。作業開始と同時に起動し、グラス側に「空間に固定されたデモ表示」を出す。
-/// スマホ画面は今まで通り作業中ページ (UI Toolkit) のまま。
+/// AR作業表示のコントローラ。
+/// 初回の作業開始でXR・カメラリグ・スマホ描画経路 (PhoneScreenUi) を立ち上げ、
+/// **以後アプリ終了まで維持する** (XRの停止/再開とスマホ描画経路の行き来は実機で不安定なため。
+/// 作業終了時はグラスに出すコンテンツだけを畳む。グラスは何も表示しない=素通しになる)。
 ///
-/// 仕組み: XREAL SDKが有効だと、シーンのカメラはグラスへ描画される。
-/// このクラスはそのカメラ (頭の動きに追従) とデモ用の3Dオブジェクトをコードで組み立てるだけ。
-/// 将来はこのデモ部分を「選木マーカー・かかり木危険域・HUD」の各レイヤーに置き換えていく。
-///
-/// グラス未接続やエディタでは、カメラの描画先が無い/画面裏になるだけで実害はない。
+/// 作業中の表示は、モーションステレオが実際に識別・計測した木を空間に固定表示する:
+///  - 案内板: 計測プロトコルの手順と現在の状態
+///  - 木マーカー: 計測した木の足元の輪 + 距離ラベル (計測するたびに増える。選木表示の原型)
 /// </summary>
 public class ArDemoController : MonoBehaviour
 {
     static ArDemoController _instance;
 
-    Transform _spinner;
     Camera _phoneCamera;
     Camera _arCamera;
-    TextMesh _demoText;
+    GameObject _workRoot;   // 作業1回分の表示。終了で破棄する
+    TextMesh _statusText;
     MotionStereoController _motionStereo;
+    readonly List<(Vector3 pos, TextMesh label)> _markers = new List<(Vector3, TextMesh)>();
 
     /// <summary>モーションステレオの直近の計測距離 (m)。未計測なら -1</summary>
     public static float LatestDistanceMeters { get; private set; } = -1f;
 
-    /// <summary>モーションステレオの状態と直近結果 (診断表示用)。AR未起動なら空文字</summary>
+    /// <summary>モーションステレオの状態と直近結果 (診断表示用)。計測停止中なら空文字</summary>
     public static string MeasurementStatus =>
         _instance != null && _instance._motionStereo != null
             ? $"{_instance._motionStereo.Hud} {_instance._motionStereo.ResultText}".Trim()
             : "";
 
-    /// <summary>ARデモを開始する (多重起動は無視)。先にXRを手動起動してからデモを組み立てる</summary>
+    /// <summary>作業開始: 初回はXRごと立ち上げ、2回目以降はコンテンツだけ再構築する</summary>
     public static void StartDemo()
     {
-        if (_instance != null) return;
-
-        // XRはアプリ起動時ではなくここで立ち上げる (Initialize XR on Startupはオフ運用)
-        if (!XrSession.EnsureStarted())
+        if (_instance == null)
         {
-            Debug.LogWarning($"ArDemo: XRなしで続行 ({XrSession.LastError})");
+            // XRはアプリ起動時ではなくここで立ち上げる (Initialize XR on Startupはオフ運用)
+            if (!XrSession.EnsureStarted())
+            {
+                Debug.LogWarning($"ArWork: XRなしで続行 ({XrSession.LastError})");
+            }
+
+            var go = new GameObject("ArWork");
+            _instance = go.AddComponent<ArDemoController>();
+            try
+            {
+                _instance.BuildRig();
+                // XRが動いている間はUI Toolkitの通常描画がスマホに届かないので、テクスチャ経由に切り替える
+                // (以後アプリ終了までこの経路のまま。経路の行き来はしない)
+                if (XrSession.IsRunning)
+                {
+                    PhoneScreenUi.Attach(_instance._phoneCamera);
+                }
+            }
+            catch (System.Exception e)
+            {
+                Debug.LogException(e);
+            }
         }
 
-        var go = new GameObject("ArDemo");
-        _instance = go.AddComponent<ArDemoController>();
         try
         {
-            _instance.BuildRig();
-            _instance.BuildDemoContent();
-            _instance.BuildMotionStereo();
-
-            // XRが動いている間はUI Toolkitの通常描画がスマホに届かないので、テクスチャ経由に切り替える
-            if (XrSession.IsRunning)
-            {
-                PhoneScreenUi.Attach(_instance._phoneCamera);
-            }
+            _instance.BeginWork();
         }
         catch (System.Exception e)
         {
-            // デモの組み立てに失敗しても作業フロー (カメラ等) は止めない
+            // AR表示の組み立てに失敗しても作業フロー (カメラ等) は止めない
             Debug.LogException(e);
         }
     }
 
-    /// <summary>ARデモを停止して片付ける (XRも止める)</summary>
+    /// <summary>作業終了: グラスのコンテンツと計測だけを畳む (XRとスマホ描画経路は維持)</summary>
     public static void StopDemo()
     {
         if (_instance == null) return;
-        PhoneScreenUi.Detach();
-        Destroy(_instance.gameObject);
-        _instance = null;
+        _instance.EndWork();
         LatestDistanceMeters = -1f;
-        XrSession.Stop();
+    }
+
+    // ---- 作業コンテンツの組み立て/破棄 ----
+
+    void BeginWork()
+    {
+        if (_workRoot != null) return; // すでに作業中
+        _workRoot = new GameObject("WorkContent");
+        _workRoot.transform.SetParent(transform);
+
+        BuildStatusBoard();
+        BuildMotionStereo();
+    }
+
+    void EndWork()
+    {
+        if (_workRoot == null) return;
+        Destroy(_workRoot); // 案内板・マーカー・MotionStereoはこの下にいるので一括で片付く
+        _workRoot = null;
+        _statusText = null;
+        _motionStereo = null;
+        _markers.Clear();
+    }
+
+    /// <summary>案内板: 計測プロトコルの手順と状態を出す空間固定のテキスト (開始位置の正面2m)</summary>
+    void BuildStatusBoard()
+    {
+        var boardGo = new GameObject("StatusBoard");
+        boardGo.transform.SetParent(_workRoot.transform);
+
+        var origin = _arCamera != null ? _arCamera.transform : transform;
+        var forward = origin.forward;
+        forward.y = 0f;
+        if (forward.sqrMagnitude < 0.01f) forward = Vector3.forward;
+        forward.Normalize();
+        boardGo.transform.position = origin.position + forward * 2f;
+        boardGo.transform.rotation = Quaternion.LookRotation(forward);
+
+        _statusText = boardGo.AddComponent<TextMesh>();
+        _statusText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        _statusText.GetComponent<MeshRenderer>().material = _statusText.font.material;
+        _statusText.fontSize = 48;
+        _statusText.characterSize = 0.012f;
+        _statusText.anchor = TextAnchor.MiddleCenter;
+        _statusText.alignment = TextAlignment.Center;
+        _statusText.color = new Color(0.85f, 1f, 0.9f);
+    }
+
+    void Update()
+    {
+        if (_statusText == null) return;
+        // 案内板に手順+現在の計測状態を出す (毎フレーム読み直す)
+        string hud = _motionStereo != null ? _motionStereo.Hud : "";
+        string result = _motionStereo != null ? _motionStereo.ResultText : "";
+        _statusText.text =
+            "① 5〜6m歩く  ② 木を見て静止\n③ 横に30cmステップして静止\n" +
+            $"{hud}\n{result}";
     }
 
     /// <summary>
@@ -83,7 +147,7 @@ public class ArDemoController : MonoBehaviour
     void BuildMotionStereo()
     {
         var go = new GameObject("MotionStereo");
-        go.transform.SetParent(transform);
+        go.transform.SetParent(_workRoot.transform);
         _motionStereo = go.AddComponent<MotionStereoController>();
         _motionStereo.trackedCamera = _arCamera; // シーンの2D用Main Cameraを掴まないように明示
         _motionStereo.saveKeyframes = false;
@@ -91,21 +155,85 @@ public class ArDemoController : MonoBehaviour
         _motionStereo.OnResult += OnMeasured;
     }
 
+    /// <summary>計測成功: 対象の3D位置を逆算して、その場所に木マーカーを立てる</summary>
     void OnMeasured(MsResult result)
     {
-        if (!result.Success) return;
+        if (!result.Success || _motionStereo == null) return;
         LatestDistanceMeters = result.TargetDistanceMeters;
-        // グラス側のデモテキストにも出す (空間固定なので作業しながら読める)
-        if (_demoText != null)
-        {
-            _demoText.text = $"対象まで {result.TargetDistanceMeters:F2} m\n({result.TargetPointCount}点)";
-        }
+
+        var kf = _motionStereo.LastKeyframeA;
+        if (kf == null || _workRoot == null) return;
+
+        // 注目領域=画像中央の画素を、キーフレームAのカメラ姿勢と内部パラメータでワールドへ逆投影する
+        float u = kf.Width * 0.5f;
+        float v = kf.Height * 0.5f;
+        var dirCamera = new Vector3(
+            (u - kf.Cx) / kf.Fx,
+            -((v - kf.Cy) / kf.Fy), // 画像は下向きが+v、カメラ空間は上向きが+y
+            1f).normalized;
+        var dirWorld = kf.CamRotation * dirCamera;
+        var target = kf.CamPosition + dirWorld * result.TargetDistanceMeters;
+
+        PlaceTreeMarker(target, result.TargetDistanceMeters);
     }
 
-    void OnDestroy()
+    /// <summary>木マーカー: 足元の輪 + 距離ラベル。近い場所の再計測は既存マーカーを更新する</summary>
+    void PlaceTreeMarker(Vector3 worldPos, float distanceMeters)
     {
-        PhoneScreenUi.Detach(); // 想定外の破棄でもスマホ画面の描画経路を元に戻す
+        // 既存マーカーの近く (水平0.8m以内) なら同じ木とみなして距離だけ更新
+        for (int i = 0; i < _markers.Count; i++)
+        {
+            var d = worldPos - _markers[i].pos;
+            d.y = 0f;
+            if (d.magnitude < 0.8f)
+            {
+                if (_markers[i].label != null) _markers[i].label.text = $"{distanceMeters:F1}m";
+                return;
+            }
+        }
+
+        // 地面の高さは頭の位置から近似 (目線-1.5m)。地面検出が入ったら置き換える
+        float groundY = (_arCamera != null ? _arCamera.transform.position.y : 1.6f) - 1.5f;
+
+        var root = new GameObject($"TreeMarker_{_markers.Count}");
+        root.transform.SetParent(_workRoot.transform);
+        root.transform.position = new Vector3(worldPos.x, groundY, worldPos.z);
+
+        var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        ring.name = "Ring";
+        ring.transform.SetParent(root.transform, false);
+        ring.transform.localPosition = new Vector3(0f, 0.02f, 0f);
+        ring.transform.localScale = new Vector3(0.8f, 0.02f, 0.8f);
+        Destroy(ring.GetComponent<Collider>());
+        ring.GetComponent<Renderer>().material = MakeUnlit(new Color(0.3f, 1f, 0.5f));
+
+        var labelGo = new GameObject("Label");
+        labelGo.transform.SetParent(root.transform, false);
+        labelGo.transform.localPosition = new Vector3(0f, 1.4f, 0f);
+        if (_arCamera != null)
+        {
+            // 立てた瞬間のカメラの方を向ける (TextMeshは+Zが背面なのでこの向きで正しく読める)
+            var labelWorldPos = root.transform.position + Vector3.up * 1.4f;
+            var look = labelWorldPos - _arCamera.transform.position;
+            look.y = 0f; // 上下には傾けない
+            if (look.sqrMagnitude > 0.01f)
+            {
+                labelGo.transform.rotation = Quaternion.LookRotation(look);
+            }
+        }
+        var label = labelGo.AddComponent<TextMesh>();
+        label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        label.GetComponent<MeshRenderer>().material = label.font.material;
+        label.fontSize = 48;
+        label.characterSize = 0.02f;
+        label.anchor = TextAnchor.LowerCenter;
+        label.color = new Color(0.3f, 1f, 0.5f);
+        label.text = $"{distanceMeters:F1}m";
+
+        _markers.Add((root.transform.position, label));
     }
+
+    // ---- リグ (初回だけ作り、以後維持) ----
 
     /// <summary>頭の動きに追従するカメラ (グラス側の視点) + スマホ画面用カメラ</summary>
     void BuildRig()
@@ -134,9 +262,7 @@ public class ArDemoController : MonoBehaviour
 
     /// <summary>
     /// スマホ画面用カメラ。XRが動いている間、XR用カメラはグラスにしか描かないので、
-    /// 何もしないとスマホ画面は最後のフレームのまま止まって見える (作業中ページが出ない原因)。
-    /// XREAL SDKの仮想コントローラUIと同じ手法 (allowXRRendering=false) で、スマホ画面 (Display 1) を
-    /// 背景色で塗り続けるカメラを置く。その上にUI Toolkitのアプリ画面が載る。3Dは何も描かない。
+    /// スマホ画面 (Display 1) を描き続けるカメラが必要 (XREAL SDKの仮想コントローラUIと同じ手法)。
     /// </summary>
     Camera BuildPhoneScreenCamera()
     {
@@ -154,57 +280,6 @@ public class ArDemoController : MonoBehaviour
         data.allowXRRendering = false; // ← これがスマホ画面に描くための肝
         data.renderPostProcessing = false;
         return cam;
-    }
-
-    /// <summary>デモ表示: 起動確認用の適当なオブジェクト群 (あとで本物のレイヤーに差し替える)</summary>
-    void BuildDemoContent()
-    {
-        // 正面2mに回る緑のキューブ (「ARが動いている」ことが一目で分かる目印)
-        var cube = GameObject.CreatePrimitive(PrimitiveType.Cube);
-        cube.name = "DemoCube";
-        cube.transform.SetParent(transform);
-        cube.transform.position = new Vector3(0f, 0f, 2f);
-        cube.transform.localScale = Vector3.one * 0.3f;
-        cube.GetComponent<Renderer>().material = MakeUnlit(new Color(0.3f, 1f, 0.5f));
-        Destroy(cube.GetComponent<Collider>());
-        _spinner = cube.transform;
-
-        // 足元の周囲に選木マーカー風の輪を置く (空間固定の見え方確認用)
-        for (int i = 0; i < 6; i++)
-        {
-            float angle = i * Mathf.PI * 2f / 6f;
-            var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-            ring.name = $"DemoMarker_{i}";
-            ring.transform.SetParent(transform);
-            ring.transform.position = new Vector3(Mathf.Cos(angle) * 2.5f, -1.4f, Mathf.Sin(angle) * 2.5f + 2f);
-            ring.transform.localScale = new Vector3(0.6f, 0.02f, 0.6f);
-            ring.GetComponent<Renderer>().material =
-                MakeUnlit(i % 3 == 0 ? new Color(1f, 0.55f, 0.15f) : new Color(0.3f, 1f, 0.5f));
-            Destroy(ring.GetComponent<Collider>());
-        }
-
-        // 空間に浮かぶテキスト (日本語はOSフォントにフォールバックして表示される)
-        var textGo = new GameObject("DemoText");
-        textGo.transform.SetParent(transform);
-        textGo.transform.position = new Vector3(0f, 0.5f, 2f);
-        var text = textGo.AddComponent<TextMesh>();
-        text.text = "CAN伐 ARデモ起動中";
-        _demoText = text;
-        text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
-        text.GetComponent<MeshRenderer>().material = text.font.material;
-        text.fontSize = 48;
-        text.characterSize = 0.02f;
-        text.anchor = TextAnchor.MiddleCenter;
-        text.color = new Color(0.85f, 1f, 0.9f);
-    }
-
-    void Update()
-    {
-        // キューブをゆっくり回す (止まって見えたらアプリが固まっている、の目印にもなる)
-        if (_spinner != null)
-        {
-            _spinner.Rotate(0f, 40f * Time.deltaTime, 0f);
-        }
     }
 
     /// <summary>
@@ -226,7 +301,7 @@ public class ArDemoController : MonoBehaviour
             var shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Sprites/Default");
             if (shader == null)
             {
-                Debug.LogWarning("ArDemo: unlitシェーダーが見つからないので既定マテリアルで表示します");
+                Debug.LogWarning("ArWork: unlitシェーダーが見つからないので既定マテリアルで表示します");
                 return null;
             }
             mat = new Material(shader);
@@ -234,5 +309,10 @@ public class ArDemoController : MonoBehaviour
         mat.SetColor("_BaseColor", color);
         mat.color = color; // _BaseColorを持たないシェーダー向けの保険
         return mat;
+    }
+
+    void OnDestroy()
+    {
+        PhoneScreenUi.Detach(); // アプリ終了などの想定外の破棄でもスマホ画面の描画経路を元に戻す
     }
 }
