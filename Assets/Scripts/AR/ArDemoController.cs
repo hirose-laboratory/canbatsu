@@ -24,7 +24,11 @@ public class ArDemoController : MonoBehaviour
     GameObject _workRoot;   // 作業1回分の表示。終了で破棄する
     TextMesh _statusText;
     MotionStereoController _motionStereo;
-    readonly List<(Vector3 pos, TextMesh label)> _markers = new List<(Vector3, TextMesh)>();
+    readonly List<(GameObject root, TextMesh label)> _markers = new List<(GameObject, TextMesh)>();
+
+    // 作業中に計測した3D点群 (ワールド座標)。木検出 (TreeDetectMS) の入力として蓄積する
+    readonly List<MsPoint3> _cloudPoints = new List<MsPoint3>();
+    int _treeCount;
 
     /// <summary>モーションステレオの直近の計測距離 (m)。未計測なら -1</summary>
     public static float LatestDistanceMeters { get; private set; } = -1f;
@@ -103,6 +107,8 @@ public class ArDemoController : MonoBehaviour
         _statusText = null;
         _motionStereo = null;
         _markers.Clear();
+        _cloudPoints.Clear();
+        _treeCount = 0;
     }
 
     /// <summary>案内板: 計測プロトコルの手順と状態を出す空間固定のテキスト (開始位置の正面2m)</summary>
@@ -131,13 +137,35 @@ public class ArDemoController : MonoBehaviour
 
     void Update()
     {
+        if (_arCamera != null)
+        {
+            // 文字が常にカメラの方を向くようにする (設置時の向きで固定だと回り込んだとき鏡文字になる)
+            BillboardToCamera(_statusText != null ? _statusText.transform : null);
+            foreach (var marker in _markers)
+            {
+                if (marker.label != null) BillboardToCamera(marker.label.transform);
+            }
+        }
+
         if (_statusText == null) return;
-        // 案内板に手順+現在の計測状態を出す (毎フレーム読み直す)
+        // 案内板に手順+現在の状態を出す (毎フレーム読み直す)
         string hud = _motionStereo != null ? _motionStereo.Hud : "";
         string result = _motionStereo != null ? _motionStereo.ResultText : "";
         _statusText.text =
             "① 5〜6m歩く  ② 木を見て静止\n③ 横に30cmステップして静止\n" +
-            $"{hud}\n{result}";
+            $"検出した木: {_treeCount}本\n{hud}\n{result}".TrimEnd();
+    }
+
+    /// <summary>テキストをカメラの方へ向ける (TextMeshは+Zが背面なので「カメラから遠ざかる向き」を向かせる)</summary>
+    void BillboardToCamera(Transform text)
+    {
+        if (text == null) return;
+        var look = text.position - _arCamera.transform.position;
+        look.y = 0f; // 上下には傾けない
+        if (look.sqrMagnitude > 0.01f)
+        {
+            text.rotation = Quaternion.LookRotation(look);
+        }
     }
 
     /// <summary>
@@ -155,7 +183,10 @@ public class ArDemoController : MonoBehaviour
         _motionStereo.OnResult += OnMeasured;
     }
 
-    /// <summary>計測成功: 対象の3D位置を逆算して、その場所に木マーカーを立てる</summary>
+    /// <summary>
+    /// 計測成功: 三角測量した全点をワールドへ逆投影して点群に蓄積し、
+    /// 木検出 (TreeDetectMS = tree_detect_ms.py のC#移植) にかけて、検出した幹の位置にマーカーを立て直す。
+    /// </summary>
     void OnMeasured(MsResult result)
     {
         if (!result.Success || _motionStereo == null) return;
@@ -164,40 +195,66 @@ public class ArDemoController : MonoBehaviour
         var kf = _motionStereo.LastKeyframeA;
         if (kf == null || _workRoot == null) return;
 
-        // 注目領域=画像中央の画素を、キーフレームAのカメラ姿勢と内部パラメータでワールドへ逆投影する
-        float u = kf.Width * 0.5f;
-        float v = kf.Height * 0.5f;
-        var dirCamera = new Vector3(
-            (u - kf.Cx) / kf.Fx,
-            -((v - kf.Cy) / kf.Fy), // 画像は下向きが+v、カメラ空間は上向きが+y
-            1f).normalized;
-        var dirWorld = kf.CamRotation * dirCamera;
-        var target = kf.CamPosition + dirWorld * result.TargetDistanceMeters;
-
-        PlaceTreeMarker(target, result.TargetDistanceMeters);
-    }
-
-    /// <summary>木マーカー: 足元の輪 + 距離ラベル。近い場所の再計測は既存マーカーを更新する</summary>
-    void PlaceTreeMarker(Vector3 worldPos, float distanceMeters)
-    {
-        // 既存マーカーの近く (水平0.8m以内) なら同じ木とみなして距離だけ更新
-        for (int i = 0; i < _markers.Count; i++)
+        // 各画素をキーフレームAのカメラ姿勢と内部パラメータでワールドへ逆投影する
+        foreach (var p in result.Points)
         {
-            var d = worldPos - _markers[i].pos;
-            d.y = 0f;
-            if (d.magnitude < 0.8f)
-            {
-                if (_markers[i].label != null) _markers[i].label.text = $"{distanceMeters:F1}m";
-                return;
-            }
+            var dirCamera = new Vector3(
+                (p.U - kf.Cx) / kf.Fx,
+                -((p.V - kf.Cy) / kf.Fy), // 画像は下向きが+v、カメラ空間は上向きが+y
+                1f).normalized;
+            var world = kf.CamPosition + kf.CamRotation * dirCamera * p.DistanceMeters;
+            _cloudPoints.Add(new MsPoint3(world.x, world.y, world.z));
         }
 
-        // 地面の高さは頭の位置から近似 (目線-1.5m)。地面検出が入ったら置き換える
-        float groundY = (_arCamera != null ? _arCamera.transform.position.y : 1.6f) - 1.5f;
+        var trees = TreeDetectMS.DetectTrees(_cloudPoints, kf.CamPosition.y, out double groundY);
+        _treeCount = trees.Count;
 
+        if (trees.Count > 0)
+        {
+            RebuildTreeMarkers(trees, (float)groundY, kf.CamPosition);
+        }
+        else
+        {
+            // まだ幹として確定できる点群がない。従来どおり画像中央の対象に仮マーカーを出して手応えは返す
+            float u = kf.Width * 0.5f;
+            float v = kf.Height * 0.5f;
+            var dirCamera = new Vector3((u - kf.Cx) / kf.Fx, -((v - kf.Cy) / kf.Fy), 1f).normalized;
+            var target = kf.CamPosition + kf.CamRotation * dirCamera * result.TargetDistanceMeters;
+            ClearMarkers();
+            PlaceMarker(target, $"{result.TargetDistanceMeters:F1}m?", new Color(0.8f, 0.8f, 0.8f));
+        }
+    }
+
+    /// <summary>検出した幹ごとにマーカーを立て直す (点群は蓄積式なので毎回作り直すのが簡単で確実)</summary>
+    void RebuildTreeMarkers(List<MsTree> trees, float groundY, Vector3 measureCamPos)
+    {
+        ClearMarkers();
+        foreach (var tree in trees)
+        {
+            var pos = new Vector3((float)tree.X, groundY, (float)tree.Z);
+            var flat = pos - measureCamPos;
+            flat.y = 0f;
+            float dist = flat.magnitude;
+            if (dist > 10f) continue; // 遠すぎる検出は誤差が大きいので出さない
+            PlaceMarker(pos, $"{dist:F1}m", new Color(0.3f, 1f, 0.5f));
+        }
+    }
+
+    void ClearMarkers()
+    {
+        foreach (var marker in _markers)
+        {
+            if (marker.root != null) Destroy(marker.root);
+        }
+        _markers.Clear();
+    }
+
+    /// <summary>木マーカー: 足元の輪 + ラベル (ラベルの向きはUpdateで毎フレームカメラへ向ける)</summary>
+    void PlaceMarker(Vector3 groundPos, string text, Color color)
+    {
         var root = new GameObject($"TreeMarker_{_markers.Count}");
         root.transform.SetParent(_workRoot.transform);
-        root.transform.position = new Vector3(worldPos.x, groundY, worldPos.z);
+        root.transform.position = groundPos;
 
         var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
         ring.name = "Ring";
@@ -205,32 +262,21 @@ public class ArDemoController : MonoBehaviour
         ring.transform.localPosition = new Vector3(0f, 0.02f, 0f);
         ring.transform.localScale = new Vector3(0.8f, 0.02f, 0.8f);
         Destroy(ring.GetComponent<Collider>());
-        ring.GetComponent<Renderer>().material = MakeUnlit(new Color(0.3f, 1f, 0.5f));
+        ring.GetComponent<Renderer>().material = MakeUnlit(color);
 
         var labelGo = new GameObject("Label");
         labelGo.transform.SetParent(root.transform, false);
         labelGo.transform.localPosition = new Vector3(0f, 1.4f, 0f);
-        if (_arCamera != null)
-        {
-            // 立てた瞬間のカメラの方を向ける (TextMeshは+Zが背面なのでこの向きで正しく読める)
-            var labelWorldPos = root.transform.position + Vector3.up * 1.4f;
-            var look = labelWorldPos - _arCamera.transform.position;
-            look.y = 0f; // 上下には傾けない
-            if (look.sqrMagnitude > 0.01f)
-            {
-                labelGo.transform.rotation = Quaternion.LookRotation(look);
-            }
-        }
         var label = labelGo.AddComponent<TextMesh>();
         label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         label.GetComponent<MeshRenderer>().material = label.font.material;
         label.fontSize = 48;
         label.characterSize = 0.02f;
         label.anchor = TextAnchor.LowerCenter;
-        label.color = new Color(0.3f, 1f, 0.5f);
-        label.text = $"{distanceMeters:F1}m";
+        label.color = color;
+        label.text = text;
 
-        _markers.Add((root.transform.position, label));
+        _markers.Add((root, label));
     }
 
     // ---- リグ (初回だけ作り、以後維持) ----
