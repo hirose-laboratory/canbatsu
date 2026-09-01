@@ -26,8 +26,8 @@ public class ArDemoController : MonoBehaviour
     MotionStereoController _motionStereo;
     readonly List<(GameObject root, TextMesh label)> _markers = new List<(GameObject, TextMesh)>();
 
-    // 作業中に計測した3D点群 (ワールド座標)。木検出 (TreeDetectMS) の入力として蓄積する
-    readonly List<MsPoint3> _cloudPoints = new List<MsPoint3>();
+    // 作業中に計測した3D点群 (ワールド座標)。木検出 (TreeDetectorMS) の入力として蓄積する
+    readonly List<Vector3> _cloudPoints = new List<Vector3>();
     int _treeCount;
 
     /// <summary>モーションステレオの直近の計測距離 (m)。未計測なら -1</summary>
@@ -184,8 +184,9 @@ public class ArDemoController : MonoBehaviour
     }
 
     /// <summary>
-    /// 計測成功: 三角測量した全点をワールドへ逆投影して点群に蓄積し、
-    /// 木検出 (TreeDetectMS = tree_detect_ms.py のC#移植) にかけて、検出した幹の位置にマーカーを立て直す。
+    /// 計測成功: 三角測量点 (0831版からワールド座標付き) を点群に蓄積し、
+    /// 木検出 (TreeDetectorMS = AI担当の tree_detect_ms.py C#移植、斜面対応) にかけて、
+    /// 検出した幹の位置にマーカーを立て直す。近すぎるペア (=間伐候補) はオレンジで示す。
     /// </summary>
     void OnMeasured(MsResult result)
     {
@@ -195,23 +196,20 @@ public class ArDemoController : MonoBehaviour
         var kf = _motionStereo.LastKeyframeA;
         if (kf == null || _workRoot == null) return;
 
-        // 各画素をキーフレームAのカメラ姿勢と内部パラメータでワールドへ逆投影する
         foreach (var p in result.Points)
         {
-            var dirCamera = new Vector3(
-                (p.U - kf.Cx) / kf.Fx,
-                -((p.V - kf.Cy) / kf.Fy), // 画像は下向きが+v、カメラ空間は上向きが+y
-                1f).normalized;
-            var world = kf.CamPosition + kf.CamRotation * dirCamera * p.DistanceMeters;
-            _cloudPoints.Add(new MsPoint3(world.x, world.y, world.z));
+            _cloudPoints.Add(p.WorldPosition);
         }
 
-        var trees = TreeDetectMS.DetectTrees(_cloudPoints, kf.CamPosition.y, out double groundY);
+        // 距離フィルタの基準は計測時のカメラ位置 (10m超の検出は誤差が大きいので既定で除外される)
+        // 地面の高さは木ごとの MsTree.GroundY (局所地面、斜面対応) を使う
+        var trees = TreeDetectorMS.Detect(
+            _cloudPoints, kf.CamPosition.y, kf.CamPosition, out _, out _);
         _treeCount = trees.Count;
 
         if (trees.Count > 0)
         {
-            RebuildTreeMarkers(trees, (float)groundY, kf.CamPosition);
+            RebuildTreeMarkers(trees, kf.CamPosition);
         }
         else
         {
@@ -226,17 +224,16 @@ public class ArDemoController : MonoBehaviour
     }
 
     /// <summary>検出した幹ごとにマーカーを立て直す (点群は蓄積式なので毎回作り直すのが簡単で確実)</summary>
-    void RebuildTreeMarkers(List<MsTree> trees, float groundY, Vector3 measureCamPos)
+    void RebuildTreeMarkers(List<MsTree> trees, Vector3 measureCamPos)
     {
         ClearMarkers();
         foreach (var tree in trees)
         {
-            var pos = new Vector3((float)tree.X, groundY, (float)tree.Z);
-            var flat = pos - measureCamPos;
-            flat.y = 0f;
-            float dist = flat.magnitude;
-            if (dist > 10f) continue; // 遠すぎる検出は誤差が大きいので出さない
-            PlaceMarker(pos, $"{dist:F1}m", new Color(0.3f, 1f, 0.5f));
+            float dist = tree.HorizontalDistanceFrom(measureCamPos);
+            // 近すぎるペア (1m未満) は過密=間伐候補としてオレンジ表示。それ以外は緑
+            var color = tree.IsTooClose ? new Color(1f, 0.55f, 0.1f) : new Color(0.3f, 1f, 0.5f);
+            // 足元の高さは木ごとの局所地面 (斜面対応)
+            PlaceMarker(tree.TrunkBase, $"{dist:F1}m", color);
         }
     }
 

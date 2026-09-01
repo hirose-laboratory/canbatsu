@@ -64,11 +64,18 @@ namespace CanbatsuMS
                 if (!TrackBidirectional(a, b, c.x, c.y, out float ub, out float vb))
                     continue;
                 tracked++;
-                if (Triangulate(a, b, c.x, c.y, ub, vb, out float dist))
+                if (Triangulate(a, b, c.x, c.y, ub, vb, out float dist, out Vector3 world))
                 {
+                    // スケール補正はカメラA原点まわりの相似変換
                     dist *= res.ScaleFactor;
+                    world = a.CamPosition + (world - a.CamPosition) * res.ScaleFactor;
                     if (dist > Config.MinDistance && dist < Config.MaxDistance)
-                        res.Points.Add(new MsDepthPoint { U = c.x, V = c.y, DistanceMeters = dist });
+                        res.Points.Add(new MsDepthPoint
+                        {
+                            U = c.x, V = c.y,
+                            DistanceMeters = dist,
+                            WorldPosition = world,
+                        });
                 }
             }
 
@@ -354,11 +361,13 @@ namespace CanbatsuMS
             return true;
         }
 
-        /// <summary>レイ中点法三角測量 → カメラAからのユークリッド距離</summary>
+        /// <summary>レイ中点法三角測量 → カメラAからのユークリッド距離とワールド座標</summary>
         private bool Triangulate(MsKeyframe a, MsKeyframe b,
-                                 float uA, float vA, float uB, float vB, out float dist)
+                                 float uA, float vA, float uB, float vB,
+                                 out float dist, out Vector3 world)
         {
             dist = 0;
+            world = default;
             Vector3 dA = PixelRay(a, uA, vA);
             Vector3 dB = PixelRay(b, uB, vB);
             Vector3 bl = b.CamPosition - a.CamPosition;
@@ -382,6 +391,7 @@ namespace CanbatsuMS
             if (Vector3.Dot(X - a.CamPosition, a.CamRotation * Vector3.forward) <= 0f)
                 return false;
             dist = Vector3.Distance(X, a.CamPosition);
+            world = X;
             return true;
         }
 

@@ -49,8 +49,9 @@ namespace CanbatsuMS
     /// <summary>三角測量された1点</summary>
     public struct MsDepthPoint
     {
-        public float U, V;         // キーフレームA上の画素
+        public float U, V;           // キーフレームA上の画素
         public float DistanceMeters; // カメラAからのユークリッド距離(スケール補正後)
+        public Vector3 WorldPosition; // ワールド座標(スケール補正後)。木検出・AR表示に使う
     }
 
     /// <summary>注目領域内の深度クラスタ</summary>
@@ -88,7 +89,7 @@ namespace CanbatsuMS
         public int PatchRadius = 7;
         public int LkIterations = 12;
         public float FwdBwdMaxPixels = 1.0f;
-        public float[] InitDepthHypotheses = { 2f, 4f, 8f };
+        public float[] InitDepthHypotheses = { 1.3f, 2f, 4f, 8f };
         public float MinNcc = 0.6f;
         // 三角測量
         public float MaxRaySkewMeters = 0.5f;

@@ -62,8 +62,14 @@ namespace CanbatsuMS
         /// <summary>状態の説明 (アプリのUI表示用)</summary>
         public string Hud => _hud;
 
+        /// <summary>Hudの別名 (0831引き渡し版の命名。上流由来コードとの互換用)</summary>
+        public string HudText => _hud;
+
         /// <summary>直近の結果の説明 (アプリのUI表示用)</summary>
         public string ResultText => _resultText;
+
+        /// <summary>推定器の設定 (呼び出し側が品質条件を調整できるよう公開。0831版で追加)</summary>
+        public MsConfig EstimatorConfig => _estimator.Config;
 
         private readonly MotionStereoEstimator _estimator = new MotionStereoEstimator();
         private MsKeyframe _prevKf;
@@ -188,8 +194,19 @@ namespace CanbatsuMS
                 XREALPlugin.GetCameraIntrinsic(
                     XREALComponent.XREAL_COMPONENT_RGB_CAMERA, ref focal, ref principal);
 
+                byte[] yData = texY.GetRawTextureData();
+
+                // 画像品質ゲート (0831版): 横縞破損(カメラストリーム不良)したフレームは棄却して撮り直す
+                float streak = StreakMetric(yData, res.x, res.y);
+                if (streak > 1.8f)
+                {
+                    _lastKfTime = Time.unscaledTime; // 1秒後に自動リトライ(静止継続でOK)
+                    Debug.LogWarning($"[MSController] 画像不良(縞{streak:F1}) キーフレーム棄却");
+                    return;
+                }
+
                 var kf = MsKeyframe.FromYPlane(
-                    texY.GetRawTextureData(), res.x, res.y,
+                    yData, res.x, res.y,
                     focal.x, focal.y, principal.x, principal.y,
                     head.position, head.rotation,
                     camOffset.position, camOffset.rotation);
@@ -229,6 +246,27 @@ namespace CanbatsuMS
             {
                 Debug.LogError("[MSController] capture failed: " + e);
             }
+        }
+
+        /// <summary>横縞破損メトリクス(千分率): 左右2pxも白飽和かつ上下どちらかが暗い画素の割合。
+        /// 実測: 正常フレーム ≦1.45 / 破損フレーム 1.98〜3.54 (0831引き渡し版より)</summary>
+        private static float StreakMetric(byte[] y, int w, int h)
+        {
+            int hits = 0, total = 0;
+            for (int r = 2; r < h - 2; r += 2)
+            {
+                int row = r * w;
+                for (int c = 2; c < w - 2; c += 2)
+                {
+                    total++;
+                    int v = y[row + c];
+                    if (v < 250) continue;
+                    if (y[row + c - 2] >= 250 && y[row + c + 2] >= 250 &&
+                        (y[row - 2 * w + c] < 180 || y[row + 2 * w + c] < 180))
+                        hits++;
+                }
+            }
+            return total > 0 ? 1000f * hits / total : 0f;
         }
 
         private void SaveKeyframe(Texture2D texY, Vector2Int res, Transform head,
