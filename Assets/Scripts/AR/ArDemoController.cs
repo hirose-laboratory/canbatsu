@@ -29,7 +29,9 @@ public class ArDemoController : MonoBehaviour
     // 作業中に計測した3D点群 (ワールド座標)。木検出 (TreeDetectorMS) の入力として蓄積する
     readonly List<Vector3> _cloudPoints = new List<Vector3>();
     int _treeCount;
-    int _measureCount; // 成功した計測の回数 (HUD表示用)
+    int _tooCloseCount; // 検出中の木のうち近接ペア (過密=オレンジ) の本数
+    int _measureCount;  // 成功した計測の回数 (HUD表示用)
+    GameObject _hudRoot; // HUDはカメラの子なので_workRootと別に破棄する
 
     /// <summary>モーションステレオの直近の計測距離 (m)。未計測なら -1</summary>
     public static float LatestDistanceMeters { get; private set; } = -1f;
@@ -104,66 +106,48 @@ public class ArDemoController : MonoBehaviour
     void EndWork()
     {
         if (_workRoot == null) return;
-        Destroy(_workRoot); // HUD・マーカー・MotionStereoはこの下にいるので一括で片付く
+        Destroy(_workRoot); // マーカー・MotionStereoはこの下にいるので一括で片付く
+        if (_hudRoot != null) Destroy(_hudRoot); // HUDはカメラの子なので別に破棄する
+        _hudRoot = null;
         _workRoot = null;
         _statusText = null;
         _motionStereo = null;
         _markers.Clear();
         _cloudPoints.Clear();
         _treeCount = 0;
+        _tooCloseCount = 0;
         _measureCount = 0;
     }
 
     /// <summary>
-    /// HUD: 視界に追従する状態表示 (視線のやや下)。
-    /// 以前は開始位置に空間固定の案内板だったが、プロトコル通り5〜6m歩くと
-    /// 見えなくなり「動いているのか分からない」状態になったため、追従式に変更。
-    /// 位置はUpdateでなめらかに追いかける (完全固定だと目障りなため)。
+    /// HUD: 画面に常時固定の状態表示 (ヘッドロック。視界のやや下)。
+    /// ARカメラの子にすることで、どこを向いても必ず同じ位置に表示される。
+    /// 1行目に「検出できているか+本数」を大きく色付きで出す。
     /// </summary>
     void BuildStatusBoard()
     {
-        var boardGo = new GameObject("StatusHud");
-        boardGo.transform.SetParent(_workRoot.transform);
+        _hudRoot = new GameObject("StatusHud");
+        var parent = _arCamera != null ? _arCamera.transform : _workRoot.transform;
+        _hudRoot.transform.SetParent(parent, false);
+        // カメラの子なのでローカル座標=視界内の固定位置 (1.6m先・少し下。中央の視界は塞がない)
+        _hudRoot.transform.localPosition = new Vector3(0f, -0.24f, 1.6f);
+        _hudRoot.transform.localRotation = Quaternion.identity;
 
-        _statusText = boardGo.AddComponent<TextMesh>();
+        _statusText = _hudRoot.AddComponent<TextMesh>();
         _statusText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         _statusText.GetComponent<MeshRenderer>().material = _statusText.font.material;
         _statusText.fontSize = 48;
-        _statusText.characterSize = 0.009f;
-        _statusText.anchor = TextAnchor.MiddleCenter;
+        _statusText.characterSize = 0.008f;
+        _statusText.anchor = TextAnchor.LowerCenter;
         _statusText.alignment = TextAlignment.Center;
-        _statusText.color = new Color(0.85f, 1f, 0.9f);
-
-        // 初期位置は視線の先 (以後はUpdateで追従)
-        if (_arCamera != null)
-        {
-            _statusText.transform.position = HudTargetPosition();
-        }
-    }
-
-    /// <summary>HUDの目標位置: 視線の1.8m先・少し下 (中央の視界を塞がない)</summary>
-    Vector3 HudTargetPosition()
-    {
-        var cam = _arCamera.transform;
-        return cam.position + cam.rotation * new Vector3(0f, -0.35f, 1.8f);
+        _statusText.color = new Color(0.92f, 1f, 0.95f);
+        _statusText.richText = true; // 検出行の色分けに使う
     }
 
     void Update()
     {
         if (_arCamera != null)
         {
-            // HUDは頭の動きになめらかに追従させる (遅れて付いてくる方が読みやすく酔いにくい)
-            if (_statusText != null)
-            {
-                var t = _statusText.transform;
-                t.position = Vector3.Lerp(t.position, HudTargetPosition(), 6f * Time.deltaTime);
-                var look = t.position - _arCamera.transform.position;
-                if (look.sqrMagnitude > 0.0001f)
-                {
-                    t.rotation = Quaternion.LookRotation(look);
-                }
-            }
-
             // マーカーのラベルは空間固定のままカメラの方を向ける (固定向きだと回り込みで鏡文字になる)
             foreach (var marker in _markers)
             {
@@ -172,17 +156,30 @@ public class ArDemoController : MonoBehaviour
         }
 
         if (_statusText == null) return;
-        // HUDに手順+状態+進み具合を出す (毎フレーム読み直す)
+
+        // ---- HUD (毎フレーム読み直す) ----
+        // 1行目: 検出できているか + 本数 (大きく・色付きで一目で分かるように)
+        string detectLine;
+        if (_treeCount > 0)
+        {
+            string tooClose = _tooCloseCount > 0 ? $" (うち過密{_tooCloseCount}本)" : "";
+            detectLine = $"<size=64><color=#50FF82>● 木を検出中: {_treeCount}本{tooClose}</color></size>";
+        }
+        else if (_measureCount > 0)
+        {
+            detectLine = "<size=64><color=#FFD24C>● 計測済み・木は未確定 (計測を重ねて)</color></size>";
+        }
+        else
+        {
+            detectLine = "<size=64><color=#BBBBBB>● 検出待ち (まだ計測なし)</color></size>";
+        }
+
         string hud = _motionStereo != null ? _motionStereo.Hud : "";
         string result = _motionStereo != null ? _motionStereo.ResultText : "";
-        string progress = $"計測 {_measureCount}回 / 点群 {_cloudPoints.Count}点 / 検出した木 {_treeCount}本";
-        if (_measureCount > 0 && _treeCount == 0)
-        {
-            progress += "\n(点群が貯まると木が確定します。同じ木を数回計測してください)";
-        }
         _statusText.text =
-            "① 5〜6m歩く ② 木を見て静止 ③ 横に30cm→静止\n" +
-            $"{hud}\n{result}\n{progress}".TrimEnd();
+            detectLine + "\n" +
+            "<size=36>① 5〜6m歩く ② 木を見て静止 ③ 横に30cm→静止</size>\n" +
+            $"{hud}\n{result}\n計測 {_measureCount}回 / 点群 {_cloudPoints.Count}点".TrimEnd();
     }
 
     /// <summary>テキストをカメラの方へ向ける (TextMeshは+Zが背面なので「カメラから遠ざかる向き」を向かせる)</summary>
@@ -249,6 +246,7 @@ public class ArDemoController : MonoBehaviour
             var dirCamera = new Vector3((u - kf.Cx) / kf.Fx, -((v - kf.Cy) / kf.Fy), 1f).normalized;
             var target = kf.CamPosition + kf.CamRotation * dirCamera * result.TargetDistanceMeters;
             ClearMarkers();
+            _tooCloseCount = 0;
             PlaceMarker(target, $"{result.TargetDistanceMeters:F1}m?", new Color(0.8f, 0.8f, 0.8f));
         }
     }
@@ -257,8 +255,10 @@ public class ArDemoController : MonoBehaviour
     void RebuildTreeMarkers(List<MsTree> trees, Vector3 measureCamPos)
     {
         ClearMarkers();
+        _tooCloseCount = 0;
         foreach (var tree in trees)
         {
+            if (tree.IsTooClose) _tooCloseCount++;
             float dist = tree.HorizontalDistanceFrom(measureCamPos);
             // 近すぎるペア (1m未満) は過密=間伐候補としてオレンジ表示。それ以外は緑
             var color = tree.IsTooClose ? new Color(1f, 0.55f, 0.1f) : new Color(0.3f, 1f, 0.5f);
