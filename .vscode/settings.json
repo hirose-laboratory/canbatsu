@@ -67,6 +67,6 @@
         "*.sln": "*.csproj",
         "*.slnx": "*.csproj"
     },
-    "dotnet.defaultSolution": "2026proconKADAI.slnx",
+    "dotnet.defaultSolution": "canbatsu.slnx",
     "dotnet.enableWorkspaceBasedDevelopment": false
 }

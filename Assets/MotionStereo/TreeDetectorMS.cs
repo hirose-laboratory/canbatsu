@@ -52,6 +52,11 @@ namespace CanbatsuMS
             public float PeakSeparation = 0.7f;   // 密度ピーク(幹の種)の最小間隔 [m]
             public float MaxRangeMeters = 10f;    // 基準位置からこの距離を超える木を除外
             public float ClosePairMeters = 1.0f;  // 近すぎ判定の閾値
+
+            // 直線除去(建物面)を発動させる最小点数。40だと2本の幹の中心を通る直線が
+            // 両方の幹を「塀」と誤認して消す (2026-09-02の合成検証で確認。README_統合メモの
+            // 「癖」の対策案どおり、点群が十分密になるまで発動させない)
+            public int LineRemovalMinPoints = 200;
         }
 
         /// <summary>
@@ -130,6 +135,27 @@ namespace CanbatsuMS
                     if (hist2[i] > hist2[bi2]) bi2 = i;
                 cellGround[kv.Key] = lo2 + bi2 * 0.15f + 0.075f;
             }
+            // 幹しか写っていない孤立セルは「幹の最下点」が偽の地面になり、幹帯が上へずれて
+            // 縦の広がり条件を満たせなくなる (2026-09-02の合成検証で確認。序盤の疎な点群で顕著)。
+            // 隣接セルの支えが無く、全体地面より0.8m以上高い推定は捨てて全体地面に任せる
+            {
+                var isolatedHigh = new List<(int, int)>();
+                foreach (var kv in cellGround)
+                {
+                    bool hasNeighbor = false;
+                    for (int dx = -1; dx <= 1 && !hasNeighbor; dx++)
+                        for (int dz = -1; dz <= 1; dz++)
+                        {
+                            if (dx == 0 && dz == 0) continue;
+                            if (cellGround.ContainsKey((kv.Key.Item1 + dx, kv.Key.Item2 + dz)))
+                            { hasNeighbor = true; break; }
+                        }
+                    if (!hasNeighbor && kv.Value > groundY + 0.8f)
+                        isolatedHigh.Add(kv.Key);
+                }
+                foreach (var key in isolatedHigh) cellGround.Remove(key);
+            }
+
             for (int it = 0; it < 2; it++)
             {
                 var updated = new Dictionary<(int, int), float>();
@@ -180,7 +206,7 @@ namespace CanbatsuMS
                 var alive = new List<int>();
                 for (int i = 0; i < trunk.Count; i++)
                     if (keep[i]) alive.Add(i);
-                if (alive.Count < 40)
+                if (alive.Count < cfg.LineRemovalMinPoints)
                     break;
                 List<int> bestInl = null;
                 for (int t = 0; t < 200; t++)

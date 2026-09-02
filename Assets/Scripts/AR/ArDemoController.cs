@@ -29,6 +29,7 @@ public class ArDemoController : MonoBehaviour
     // 作業中に計測した3D点群 (ワールド座標)。木検出 (TreeDetectorMS) の入力として蓄積する
     readonly List<Vector3> _cloudPoints = new List<Vector3>();
     int _treeCount;
+    int _measureCount; // 成功した計測の回数 (HUD表示用)
 
     /// <summary>モーションステレオの直近の計測距離 (m)。未計測なら -1</summary>
     public static float LatestDistanceMeters { get; private set; } = -1f;
@@ -36,7 +37,8 @@ public class ArDemoController : MonoBehaviour
     /// <summary>モーションステレオの状態と直近結果 (診断表示用)。計測停止中なら空文字</summary>
     public static string MeasurementStatus =>
         _instance != null && _instance._motionStereo != null
-            ? $"{_instance._motionStereo.Hud} {_instance._motionStereo.ResultText}".Trim()
+            ? ($"{_instance._motionStereo.Hud} {_instance._motionStereo.ResultText} " +
+               $"| 計測{_instance._measureCount}回 点群{_instance._cloudPoints.Count} 木{_instance._treeCount}本").Trim()
             : "";
 
     /// <summary>作業開始: 初回はXRごと立ち上げ、2回目以降はコンテンツだけ再構築する</summary>
@@ -102,45 +104,67 @@ public class ArDemoController : MonoBehaviour
     void EndWork()
     {
         if (_workRoot == null) return;
-        Destroy(_workRoot); // 案内板・マーカー・MotionStereoはこの下にいるので一括で片付く
+        Destroy(_workRoot); // HUD・マーカー・MotionStereoはこの下にいるので一括で片付く
         _workRoot = null;
         _statusText = null;
         _motionStereo = null;
         _markers.Clear();
         _cloudPoints.Clear();
         _treeCount = 0;
+        _measureCount = 0;
     }
 
-    /// <summary>案内板: 計測プロトコルの手順と状態を出す空間固定のテキスト (開始位置の正面2m)</summary>
+    /// <summary>
+    /// HUD: 視界に追従する状態表示 (視線のやや下)。
+    /// 以前は開始位置に空間固定の案内板だったが、プロトコル通り5〜6m歩くと
+    /// 見えなくなり「動いているのか分からない」状態になったため、追従式に変更。
+    /// 位置はUpdateでなめらかに追いかける (完全固定だと目障りなため)。
+    /// </summary>
     void BuildStatusBoard()
     {
-        var boardGo = new GameObject("StatusBoard");
+        var boardGo = new GameObject("StatusHud");
         boardGo.transform.SetParent(_workRoot.transform);
-
-        var origin = _arCamera != null ? _arCamera.transform : transform;
-        var forward = origin.forward;
-        forward.y = 0f;
-        if (forward.sqrMagnitude < 0.01f) forward = Vector3.forward;
-        forward.Normalize();
-        boardGo.transform.position = origin.position + forward * 2f;
-        boardGo.transform.rotation = Quaternion.LookRotation(forward);
 
         _statusText = boardGo.AddComponent<TextMesh>();
         _statusText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         _statusText.GetComponent<MeshRenderer>().material = _statusText.font.material;
         _statusText.fontSize = 48;
-        _statusText.characterSize = 0.012f;
+        _statusText.characterSize = 0.009f;
         _statusText.anchor = TextAnchor.MiddleCenter;
         _statusText.alignment = TextAlignment.Center;
         _statusText.color = new Color(0.85f, 1f, 0.9f);
+
+        // 初期位置は視線の先 (以後はUpdateで追従)
+        if (_arCamera != null)
+        {
+            _statusText.transform.position = HudTargetPosition();
+        }
+    }
+
+    /// <summary>HUDの目標位置: 視線の1.8m先・少し下 (中央の視界を塞がない)</summary>
+    Vector3 HudTargetPosition()
+    {
+        var cam = _arCamera.transform;
+        return cam.position + cam.rotation * new Vector3(0f, -0.35f, 1.8f);
     }
 
     void Update()
     {
         if (_arCamera != null)
         {
-            // 文字が常にカメラの方を向くようにする (設置時の向きで固定だと回り込んだとき鏡文字になる)
-            BillboardToCamera(_statusText != null ? _statusText.transform : null);
+            // HUDは頭の動きになめらかに追従させる (遅れて付いてくる方が読みやすく酔いにくい)
+            if (_statusText != null)
+            {
+                var t = _statusText.transform;
+                t.position = Vector3.Lerp(t.position, HudTargetPosition(), 6f * Time.deltaTime);
+                var look = t.position - _arCamera.transform.position;
+                if (look.sqrMagnitude > 0.0001f)
+                {
+                    t.rotation = Quaternion.LookRotation(look);
+                }
+            }
+
+            // マーカーのラベルは空間固定のままカメラの方を向ける (固定向きだと回り込みで鏡文字になる)
             foreach (var marker in _markers)
             {
                 if (marker.label != null) BillboardToCamera(marker.label.transform);
@@ -148,12 +172,17 @@ public class ArDemoController : MonoBehaviour
         }
 
         if (_statusText == null) return;
-        // 案内板に手順+現在の状態を出す (毎フレーム読み直す)
+        // HUDに手順+状態+進み具合を出す (毎フレーム読み直す)
         string hud = _motionStereo != null ? _motionStereo.Hud : "";
         string result = _motionStereo != null ? _motionStereo.ResultText : "";
+        string progress = $"計測 {_measureCount}回 / 点群 {_cloudPoints.Count}点 / 検出した木 {_treeCount}本";
+        if (_measureCount > 0 && _treeCount == 0)
+        {
+            progress += "\n(点群が貯まると木が確定します。同じ木を数回計測してください)";
+        }
         _statusText.text =
-            "① 5〜6m歩く  ② 木を見て静止\n③ 横に30cmステップして静止\n" +
-            $"検出した木: {_treeCount}本\n{hud}\n{result}".TrimEnd();
+            "① 5〜6m歩く ② 木を見て静止 ③ 横に30cm→静止\n" +
+            $"{hud}\n{result}\n{progress}".TrimEnd();
     }
 
     /// <summary>テキストをカメラの方へ向ける (TextMeshは+Zが背面なので「カメラから遠ざかる向き」を向かせる)</summary>
@@ -192,6 +221,7 @@ public class ArDemoController : MonoBehaviour
     {
         if (!result.Success || _motionStereo == null) return;
         LatestDistanceMeters = result.TargetDistanceMeters;
+        _measureCount++;
 
         var kf = _motionStereo.LastKeyframeA;
         if (kf == null || _workRoot == null) return;
