@@ -107,7 +107,8 @@ public class ArDemoController : MonoBehaviour
     {
         if (_workRoot == null) return;
         Destroy(_workRoot); // マーカー・MotionStereoはこの下にいるので一括で片付く
-        if (_hudRoot != null) Destroy(_hudRoot); // HUDはカメラの子なので別に破棄する
+        Application.onBeforeRender -= UpdateHudPose;
+        if (_hudRoot != null) Destroy(_hudRoot); // HUDは_workRootの外なので別に破棄する
         _hudRoot = null;
         _workRoot = null;
         _statusText = null;
@@ -119,30 +120,48 @@ public class ArDemoController : MonoBehaviour
         _measureCount = 0;
     }
 
+    /// <summary>視界内でのHUDの位置: 右上 (選木の視界を塞がないように)。1.6m先の右上隅</summary>
+    static readonly Vector3 HudOffset = new Vector3(0.5f, 0.24f, 1.6f);
+
     /// <summary>
-    /// HUD: 画面に常時固定の状態表示 (ヘッドロック。視界のやや下)。
-    /// ARカメラの子にすることで、どこを向いても必ず同じ位置に表示される。
+    /// HUD: 画面の右上に常時固定の状態表示。
+    /// 単にカメラの子にするだけではダメ (XRは描画直前に最新の頭の姿勢で画を補正するため、
+    /// Update時点の姿勢に置いた子オブジェクトは頭を動かすと泳いで見える)。
+    /// そこで Application.onBeforeRender = 描画される直前の最後のタイミングで
+    /// 毎フレーム位置を合わせ直すことで画面に固定する。
     /// 1行目に「検出できているか+本数」を大きく色付きで出す。
     /// </summary>
     void BuildStatusBoard()
     {
         _hudRoot = new GameObject("StatusHud");
-        var parent = _arCamera != null ? _arCamera.transform : _workRoot.transform;
-        _hudRoot.transform.SetParent(parent, false);
-        // カメラの子なのでローカル座標=視界内の固定位置 (1.6m先・少し下。中央の視界は塞がない)
-        _hudRoot.transform.localPosition = new Vector3(0f, -0.24f, 1.6f);
-        _hudRoot.transform.localRotation = Quaternion.identity;
+        _hudRoot.transform.SetParent(transform, false);
 
         _statusText = _hudRoot.AddComponent<TextMesh>();
         _statusText.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         _statusText.GetComponent<MeshRenderer>().material = _statusText.font.material;
         _statusText.fontSize = 48;
-        _statusText.characterSize = 0.008f;
-        _statusText.anchor = TextAnchor.LowerCenter;
-        _statusText.alignment = TextAlignment.Center;
+        _statusText.characterSize = 0.0065f;
+        _statusText.anchor = TextAnchor.UpperRight;   // 右上隅を基準に左下へ伸びる
+        _statusText.alignment = TextAlignment.Right;
         _statusText.color = new Color(0.92f, 1f, 0.95f);
         _statusText.richText = true; // 検出行の色分けに使う
+
+        UpdateHudPose();
+        Application.onBeforeRender += UpdateHudPose;
     }
+
+    /// <summary>HUDをカメラの最新姿勢に張り付ける (描画直前に呼ばれるので画面に固定されて見える)</summary>
+    void UpdateHudPose()
+    {
+        if (_hudRoot == null || _arCamera == null) return;
+        var cam = _arCamera.transform;
+        _hudRoot.transform.SetPositionAndRotation(
+            cam.position + cam.rotation * HudOffset,
+            cam.rotation);
+    }
+
+    // onBeforeRenderが来ない環境 (エディタの一部構成) 向けの保険
+    void LateUpdate() => UpdateHudPose();
 
     void Update()
     {
@@ -163,23 +182,23 @@ public class ArDemoController : MonoBehaviour
         if (_treeCount > 0)
         {
             string tooClose = _tooCloseCount > 0 ? $" (うち過密{_tooCloseCount}本)" : "";
-            detectLine = $"<size=64><color=#50FF82>● 木を検出中: {_treeCount}本{tooClose}</color></size>";
+            detectLine = $"<size=56><color=#50FF82>● 検出中: {_treeCount}本{tooClose}</color></size>";
         }
         else if (_measureCount > 0)
         {
-            detectLine = "<size=64><color=#FFD24C>● 計測済み・木は未確定 (計測を重ねて)</color></size>";
+            detectLine = "<size=56><color=#FFD24C>● 木は未確定 (計測を重ねて)</color></size>";
         }
         else
         {
-            detectLine = "<size=64><color=#BBBBBB>● 検出待ち (まだ計測なし)</color></size>";
+            detectLine = "<size=56><color=#BBBBBB>● 検出待ち (まだ計測なし)</color></size>";
         }
 
         string hud = _motionStereo != null ? _motionStereo.Hud : "";
         string result = _motionStereo != null ? _motionStereo.ResultText : "";
         _statusText.text =
             detectLine + "\n" +
-            "<size=36>① 5〜6m歩く ② 木を見て静止 ③ 横に30cm→静止</size>\n" +
-            $"{hud}\n{result}\n計測 {_measureCount}回 / 点群 {_cloudPoints.Count}点".TrimEnd();
+            "<size=30>① 5〜6m歩く ② 木を見て静止 ③ 横に30cm→静止</size>\n" +
+            $"<size=34>{hud}\n{result}\n計測 {_measureCount}回 / 点群 {_cloudPoints.Count}点</size>".TrimEnd();
     }
 
     /// <summary>テキストをカメラの方へ向ける (TextMeshは+Zが背面なので「カメラから遠ざかる向き」を向かせる)</summary>
@@ -386,6 +405,7 @@ public class ArDemoController : MonoBehaviour
 
     void OnDestroy()
     {
+        Application.onBeforeRender -= UpdateHudPose;
         PhoneScreenUi.Detach(); // アプリ終了などの想定外の破棄でもスマホ画面の描画経路を元に戻す
     }
 }
