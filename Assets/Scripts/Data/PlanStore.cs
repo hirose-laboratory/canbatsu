@@ -66,20 +66,30 @@ public static class PlanStore
         FirebaseService.Db.Collection(Collection).Document(plan.Id).DeleteAsync();
     }
 
-    /// <summary>指定した日の計画を返す (今日の作業計画セクション用)</summary>
-    public static List<WorkPlan> GetByDate(DateTime date)
+    /// <summary>計画を完了にして保存する (作業終了の「記録して完了」用)。完了した計画は予定一覧に出なくなる</summary>
+    public static void Complete(WorkPlan plan)
+    {
+        plan.Status = WorkPlan.StatusCompleted;
+        Update(plan);
+    }
+
+    /// <summary>
+    /// 進行中で期日が来ている計画を日付順に返す (今日の作業計画セクション用)。
+    /// 期日を過ぎても完了していない計画は継続作業として今日も出す (計画の使い回し)。
+    /// </summary>
+    public static List<WorkPlan> GetActiveDue(DateTime date)
     {
         return _plans
-            .Where(p => p.Date.Date == date.Date)
+            .Where(p => !p.IsCompleted && p.Date.Date <= date.Date)
             .OrderBy(p => p.Date)
             .ToList();
     }
 
-    /// <summary>指定した日より後の計画を日付順に返す (今後の作業計画セクション用)</summary>
-    public static List<WorkPlan> GetAfter(DateTime date)
+    /// <summary>進行中で指定した日より後の計画を日付順に返す (今後の作業計画セクション用)</summary>
+    public static List<WorkPlan> GetActiveAfter(DateTime date)
     {
         return _plans
-            .Where(p => p.Date.Date > date.Date)
+            .Where(p => !p.IsCompleted && p.Date.Date > date.Date)
             .OrderBy(p => p.Date)
             .ToList();
     }
@@ -97,6 +107,7 @@ public static class PlanStore
             { "spacingThresholdM", (double)p.FellingIntervalM },
             { "diameterThresholdCm", (double)p.FellingStandardCm }, // この直径未満の木を伐る
             { "areaPolygon", ToGeoPoints(p.RangePoints) },
+            { "status", p.Status ?? WorkPlan.StatusActive }, // active=進行中 / completed=完了
         };
     }
 
@@ -110,6 +121,8 @@ public static class PlanStore
         if (d.TryGetValue("spacingThresholdM", out double spacing)) p.FellingIntervalM = (float)spacing;
         if (d.TryGetValue("diameterThresholdCm", out double diameter)) p.FellingStandardCm = (int)Math.Round(diameter);
         if (d.TryGetValue("areaPolygon", out List<GeoPoint> polygon)) p.RangePoints = FromGeoPoints(polygon);
+        // statusフィールドが無い旧データは進行中として扱う (フィールド初期値のまま)
+        if (d.TryGetValue("status", out string status) && !string.IsNullOrEmpty(status)) p.Status = status;
         return p;
     }
 

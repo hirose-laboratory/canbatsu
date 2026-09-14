@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Firebase.Firestore;
 using UnityEngine;
@@ -66,7 +67,17 @@ public static class RecordStore
         FirebaseService.Db.Collection(Collection).Document(record.Id).DeleteAsync();
     }
 
-    /// <summary>指定した計画に作業記録が付いているか (=作業済みか)。予定一覧の表示判定に使う</summary>
+    /// <summary>指定した計画に紐づく記録を日付順に返す (継続作業の回数表示用)</summary>
+    public static List<WorkRecord> GetByPlan(string planId)
+    {
+        if (string.IsNullOrEmpty(planId)) return new List<WorkRecord>();
+        return _records
+            .Where(r => r.PlanId == planId)
+            .OrderBy(r => r.Date)
+            .ToList();
+    }
+
+    /// <summary>指定した計画に作業記録が付いているか (=作業済みか)。記録ページの表示判定に使う</summary>
     public static bool HasRecordForPlan(string planId)
     {
         if (string.IsNullOrEmpty(planId)) return false;

@@ -161,6 +161,44 @@
     rotate: 90deg;
 }
 
+/* ---- 現在地ボタン (ズーム群の下の緑丸。白い同心円で現在地マークを描く) ---- */
+
+.plan-create__locate-button {
+    width: 44px;
+    height: 44px;
+    margin: 8px 0 0 0;
+    padding: 0;
+    border-width: 1px;
+    border-color: rgb(23, 130, 51);
+    border-radius: 22px;
+    background-color: rgb(27, 152, 60);
+    justify-content: center;
+    align-items: center;
+}
+
+.plan-create__locate-button:hover {
+    background-color: rgb(23, 130, 51);
+}
+
+/* 外側のリング */
+.plan-create__locate-ring {
+    width: 18px;
+    height: 18px;
+    border-width: 2px;
+    border-color: rgb(255, 255, 255);
+    border-radius: 9px;
+    justify-content: center;
+    align-items: center;
+}
+
+/* 中心の点 */
+.plan-create__locate-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 3px;
+    background-color: rgb(255, 255, 255);
+}
+
 /* ---- 確定ボタン ---- */
 
 .plan-create__confirm-button {

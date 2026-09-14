@@ -231,6 +231,9 @@ public class AppRouter : MonoBehaviour
         _content.Clear();
         var page = asset.Instantiate();
         page.style.flexGrow = 1;
+        // flexの子の「最小=中身の高さ」を切る。これが無いとページの中身が多いとき
+        // #contentごと伸びてヘッダー/タブバーを押し潰す (スクロールは各ページのScrollViewが担当)
+        page.style.minHeight = 0;
         _content.Add(page);
         return page;
     }

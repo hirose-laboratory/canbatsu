@@ -2,6 +2,7 @@
 
 .home {
     flex-grow: 1;
+    min-height: 0; /* 親 (#content) からもらった高さに収める (中身の高さで伸びない) */
 }
 
 /* ---- 空の状態 ---- */
@@ -66,10 +67,32 @@
     align-self: stretch;
 }
 
+/* ---- 地図取り込みの進捗表示 (取り込み中だけControllerが表示する) ---- */
+
+.home__sync-note {
+    display: none;
+    font-size: 11px;
+    color: rgb(96, 125, 106);
+    background-color: rgb(232, 238, 233);
+    padding: 6px 16px;
+    white-space: normal;
+}
+
 /* ---- 一覧表示 ---- */
 
 .home__sections {
     flex-grow: 1;
+    min-height: 0; /* これが無いとScrollViewがカード全部の高さまで伸びてスクロールにならない */
+}
+
+/* 継続中バッジ (記録が付いた進行中計画)。樹種チップより一段控えめな灰緑にする */
+.plan-card__badge {
+    font-size: 11px;
+    color: rgb(96, 125, 106);
+    background-color: rgb(232, 238, 233);
+    margin-left: 8px;
+    padding: 1px 8px;
+    border-radius: 9px;
 }
 
 .home__section-title {

@@ -36,6 +36,9 @@ public class ArDemoController : MonoBehaviour
     /// <summary>モーションステレオの直近の計測距離 (m)。未計測なら -1</summary>
     public static float LatestDistanceMeters { get; private set; } = -1f;
 
+    /// <summary>ARカメラ (グラス側の視点)。作業画像の姿勢記録 (PlanCaptureService) が使う。AR未起動ならnull</summary>
+    public static Camera HeadCamera => _instance != null ? _instance._arCamera : null;
+
     /// <summary>モーションステレオの状態と直近結果 (診断表示用)。計測停止中なら空文字</summary>
     public static string MeasurementStatus =>
         _instance != null && _instance._motionStereo != null
@@ -281,8 +284,11 @@ public class ArDemoController : MonoBehaviour
             float dist = tree.HorizontalDistanceFrom(measureCamPos);
             // 近すぎるペア (1m未満) は過密=間伐候補としてオレンジ表示。それ以外は緑
             var color = tree.IsTooClose ? new Color(1f, 0.55f, 0.1f) : new Color(0.3f, 1f, 0.5f);
+            // ラベルは「距離m + 太さcm」の2行 (太さの推定が小さすぎる=根拠不足のときは距離だけ)
+            string label = $"{dist:F1}m";
+            if (tree.WidthMeters > 0.02f) label += $"\n太さ{Mathf.RoundToInt(tree.WidthMeters * 100f)}cm";
             // 足元の高さは木ごとの局所地面 (斜面対応)
-            PlaceMarker(tree.TrunkBase, $"{dist:F1}m", color);
+            PlaceMarker(tree.TrunkBase, label, color);
         }
     }
 

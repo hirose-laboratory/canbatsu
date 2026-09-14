@@ -684,7 +684,8 @@ PlayerSettings:
   webGLCloseOnQuit: 0
   webWasm2023: 0
   webEnableSubmoduleStrippingCompatibility: 0
-  scriptingDefineSymbols: {}
+  scriptingDefineSymbols:
+    Android: CANBATSU_FB_STORAGE
   additionalCompilerArguments: {}
   platformArchitecture: {}
   scriptingBackend:

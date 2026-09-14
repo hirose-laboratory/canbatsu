@@ -1,4 +1,6 @@
+using System;
 using System.Collections.Generic;
+using System.Threading.Tasks;
 using UnityEngine;
 using UnityEngine.UIElements;
 
@@ -6,6 +8,7 @@ using UnityEngine.UIElements;
 /// 記録ページのController。
 /// 作業計画の範囲(緑)と過去の作業記録の範囲(オレンジ)を地図上に色分け表示し、
 /// 範囲をタップすると詳細ポップアップ (Googleマップの場所カード風) を出す。
+/// 下敷きとして森林簿の小班境界を樹種色で表示し、タップで小班の情報も見られる。
 /// TODO: 作業記録は今はRecordStoreのモックデータ。バックエンド完成後にSQLite同期へ差し替え
 /// </summary>
 public class RecordPageController
@@ -13,11 +16,15 @@ public class RecordPageController
     static readonly Color PlanColor = new Color(27f / 255f, 152f / 255f, 60f / 255f);
     static readonly Color RecordColor = new Color(240f / 255f, 140f / 255f, 0f);
 
+    /// <summary>info-cardの種別 (バッジ文言と削除ボタンの表示を切り替える)</summary>
+    enum InfoKind { Plan, Record }
+
     readonly VisualElement _page;
     readonly MapView _map;
     readonly Image _layerThumbImage;
     readonly Label _layerThumbLabel;
     readonly Button _layerButton;
+    readonly Button _locateButton;
     readonly VisualElement _infoCard;
     readonly Label _infoBadge;
     readonly Label _infoTitle;
@@ -27,18 +34,51 @@ public class RecordPageController
 
     WorkRecord _selectedRecord; // 詳細ポップアップで表示中の作業記録 (削除対象)
 
+    // 現在地への自動センタリング (最初のFixが来るまで、ユーザーが地図を触るまで)
+    bool _userMovedMap;
+    bool _autoCentered;
+    bool _skipNextFit; // 現在地を初期表示にしたとき、直後の全体フィットで上書きしないためのフラグ
+
     public RecordPageController(VisualElement page, AppRouter router)
     {
         _page = page;
-        // 表示専用の地図 (タップしても頂点は増えない)
+
+        // 現在地の取得を開始する (権限拒否やエディタではHasFix=falseのままフォールバックが効く)
+        var location = router.GetComponent<LocationProvider>();
+        if (location == null) location = router.gameObject.AddComponent<LocationProvider>();
+        location.StartUpdates();
+
+        // 表示専用の地図 (タップしても頂点は増えない)。Fix済みなら現在地を初期表示にする
         _map = new MapView(router) { AllowPointAdding = false };
-        _map.SetCenter(34.3766, 135.9058, 14);
+        if (LocationProvider.HasFix)
+        {
+            _map.SetCenter(LocationProvider.Latitude, LocationProvider.Longitude, 14);
+            _autoCentered = true;
+            _skipNextFit = true;
+        }
+        else
+        {
+            _map.SetCenter(34.3766, 135.9058, 14);
+        }
         page.Q<VisualElement>("map-container").Add(_map);
         _map.DisplayPolygonClicked += OnPolygonClicked;
+        _map.UserInteracted += () => _userMovedMap = true;
+
+        // 最初のFixが「まだ地図を触っていない間」に来たら一度だけ現在地へ寄せる
+        if (!_autoCentered)
+        {
+            page.schedule.Execute(() =>
+            {
+                if (_autoCentered || _userMovedMap || !LocationProvider.HasFix) return;
+                _autoCentered = true;
+                _map.SetCenter(LocationProvider.Latitude, LocationProvider.Longitude, 14);
+            }).Every(1000).Until(() => _autoCentered || _userMovedMap);
+        }
 
         _layerThumbImage = page.Q<Image>("layer-thumb-image");
         _layerThumbLabel = page.Q<Label>("layer-thumb-label");
         _layerButton = page.Q<Button>("layer-button");
+        _locateButton = page.Q<Button>("locate-button");
         _infoCard = page.Q<VisualElement>("info-card");
         _infoBadge = page.Q<Label>("info-badge");
         _infoTitle = page.Q<Label>("info-title");
@@ -49,6 +89,7 @@ public class RecordPageController
         page.Q<Button>("zoom-in-button").clicked += _map.ZoomIn;
         page.Q<Button>("zoom-out-button").clicked += _map.ZoomOut;
         _layerButton.clicked += ToggleLayer;
+        _locateButton.clicked += OnLocateClicked;
         page.Q<Button>("info-close-button").clicked += HideInfo;
 
         // 記録の削除フロー (削除ボタン → 確認ダイアログ → 削除)
@@ -64,6 +105,21 @@ public class RecordPageController
         UpdateLayerButton();
     }
 
+    /// <summary>現在地ボタン: Fixがあれば現在地へ移動、無ければ一瞬無効化して取得中であることを伝える</summary>
+    void OnLocateClicked()
+    {
+        if (LocationProvider.HasFix)
+        {
+            _userMovedMap = true; // 自分で現在地へ動かしたので以後の自動センタリングは不要
+            _map.SetCenter(LocationProvider.Latitude, LocationProvider.Longitude, _map.CurrentZoom);
+        }
+        else
+        {
+            _locateButton.SetEnabled(false);
+            _page.schedule.Execute(() => _locateButton.SetEnabled(true)).StartingIn(1200);
+        }
+    }
+
     /// <summary>予定と記録の範囲を地図に載せ直し、全体が見える位置に移動する</summary>
     public void Refresh()
     {
@@ -73,8 +129,9 @@ public class RecordPageController
         foreach (var plan in PlanStore.Plans)
         {
             if (plan.RangePoints == null || plan.RangePoints.Count < 3) continue;
-            // 作業済みの計画は記録(オレンジ)側で見せるので、予定(緑)としては描かない
-            if (RecordStore.HasRecordForPlan(plan.Id)) continue;
+            // 完了した計画は記録(オレンジ)側で見せるので、予定(緑)としては描かない
+            // (記録が付いていても進行中の計画は使い回すので緑のまま出し続ける)
+            if (plan.IsCompleted) continue;
             planCount++;
             polygons.Add(new MapView.DisplayPolygon
             {
@@ -100,7 +157,14 @@ public class RecordPageController
         }
 
         _map.SetDisplayPolygons(polygons);
-        _map.FitToDisplayPolygons();
+        if (_skipNextFit)
+        {
+            _skipNextFit = false; // 現在地を初期表示にしているのでフィットで上書きしない
+        }
+        else
+        {
+            _map.FitToDisplayPolygons();
+        }
     }
 
     // ---- 範囲タップの詳細ポップアップ ----
@@ -117,8 +181,10 @@ public class RecordPageController
         if (polygon.UserData is WorkPlan plan)
         {
             _selectedRecord = null;
+            // 計画の使い回し対応: この計画で何回作業したかも出す
+            int recordCount = RecordStore.GetByPlan(plan.Id).Count;
             ShowInfo(
-                isPlan: true,
+                kind: InfoKind.Plan,
                 title: $"{plan.Date.Month}/{plan.Date.Day} の作業予定",
                 rows: new[]
                 {
@@ -127,13 +193,14 @@ public class RecordPageController
                     ("伐採基準 (直径)", $"{plan.FellingStandardCm}cm未満"),
                     ("しきい値 (伐採間隔)", $"{plan.FellingIntervalM:0.0}m"),
                     ("対象面積", $"{plan.AreaHa:0.0#}ha"),
+                    ("記録", recordCount > 0 ? $"{recordCount}回" : "まだ"),
                 });
         }
         else if (polygon.UserData is WorkRecord record)
         {
             _selectedRecord = record;
             ShowInfo(
-                isPlan: false,
+                kind: InfoKind.Record,
                 title: $"{record.Date.Month}/{record.Date.Day} の作業記録",
                 rows: new[]
                 {
@@ -145,14 +212,14 @@ public class RecordPageController
         }
     }
 
-    void ShowInfo(bool isPlan, string title, (string key, string value)[] rows)
+    void ShowInfo(InfoKind kind, string title, (string key, string value)[] rows)
     {
         // 削除できるのは作業記録だけ
-        _infoDeleteButton.style.display = isPlan ? DisplayStyle.None : DisplayStyle.Flex;
+        _infoDeleteButton.style.display = kind == InfoKind.Record ? DisplayStyle.Flex : DisplayStyle.None;
 
-        _infoBadge.text = isPlan ? "予定" : "記録";
-        _infoBadge.EnableInClassList("record__info-badge--plan", isPlan);
-        _infoBadge.EnableInClassList("record__info-badge--record", !isPlan);
+        _infoBadge.text = kind == InfoKind.Plan ? "予定" : "記録";
+        _infoBadge.EnableInClassList("record__info-badge--plan", kind == InfoKind.Plan);
+        _infoBadge.EnableInClassList("record__info-badge--record", kind == InfoKind.Record);
         _infoTitle.text = title;
 
         _infoRows.Clear();

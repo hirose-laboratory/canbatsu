@@ -7,7 +7,7 @@ using UnityEngine.UIElements;
 /// 作業中ページ (ARグラス連携モード) のController。
 /// 開いた時点でXREAL Eyeカメラの映像取得 (EyeCameraService) を開始し、プレビューを表示する。
 /// この映像が選木AI (Sentis) への入力パイプラインになる。
-/// 「作業を終了する」→ 確認ダイアログ → カメラ停止 → 計画を作業記録に変えてホームへ戻る。
+/// 「作業を終了する」→ ダイアログで「記録して続ける (計画は進行中のまま) / 記録して完了 / キャンセル」を選ぶ。
 /// </summary>
 public class WorkingPageController
 {
@@ -39,6 +39,9 @@ public class WorkingPageController
         if (_eyeCamera == null) _eyeCamera = router.gameObject.AddComponent<EyeCameraService>();
         _eyeCamera.StartCapture();
 
+        // 作業中の視界画像を姿勢付きで定期保存する (この計画に紐づく。オンライン復帰後にまとめてアップロード)
+        PlanCaptureService.Begin(router.gameObject, plan.Id);
+
         // プレビュー表示 (UI ToolkitのImageにテクスチャを流し込み、定期的に描き直す)
         var previewImage = new Image { scaleMode = ScaleMode.ScaleAndCrop };
         previewImage.style.flexGrow = 1;
@@ -60,6 +63,12 @@ public class WorkingPageController
                 $"カメラ数:{Camera.allCamerasCount}";
             // モーションステレオ (距離計測) の状態。計測プロトコル: 5m歩く→静止→横30cmステップ→静止
             string measure = ArDemoController.MeasurementStatus;
+            // 画像蓄積の状況 (枚数と容量の目安)
+            var capture = PlanCaptureService.Active;
+            if (capture != null && capture.SavedCount > 0)
+            {
+                diag += $" 撮影:{capture.SavedCount}枚 ({capture.SavedBytes / (1024 * 1024)}MB)";
+            }
             statusLabel.text = string.IsNullOrEmpty(measure)
                 ? $"{cameraStatus}\n{diag}"
                 : $"{cameraStatus}\n{diag}\n計測: {measure}";
@@ -73,10 +82,11 @@ public class WorkingPageController
         AddRow(summary, "しきい値 (伐採間隔)", $"{plan.FellingIntervalM:0.0}m");
         AddRow(summary, "対象面積", $"{plan.AreaHa:0.0#}ha");
 
-        // 誤タップ防止のため確認ダイアログを挟む
+        // 誤タップ防止のためダイアログを挟む (記録して続ける / 記録して完了 / キャンセルの3択)
         page.Q<Button>("finish-button").clicked += ShowFinishDialog;
         page.Q<Button>("finish-cancel-button").clicked += HideFinishDialog;
-        page.Q<Button>("finish-confirm-button").clicked += CompleteWork;
+        page.Q<Button>("finish-continue-button").clicked += () => CompleteWork(completePlan: false);
+        page.Q<Button>("finish-complete-button").clicked += () => CompleteWork(completePlan: true);
         _finishDialog.RegisterCallback<ClickEvent>(evt =>
         {
             if (evt.target == _finishDialog) HideFinishDialog();
@@ -98,12 +108,14 @@ public class WorkingPageController
     void HideFinishDialog() => _finishDialog.style.display = DisplayStyle.None;
 
     /// <summary>
-    /// 作業終了: 計画から作業記録を作って保存する。
-    /// 計画自体は削除せずPlanIdで紐づけて残す (計画vs実績の比較用)。
-    /// 記録が付いた計画は予定一覧に出なくなる (HomePageControllerで除外)。
+    /// 作業終了: 計画に紐づけて作業記録を保存する (計画は削除しない。計画vs実績の比較用)。
+    /// completePlan=false なら計画は進行中のまま予定に残り、後日同じ計画で作業を続けられる (計画の使い回し)。
+    /// completePlan=true なら計画を完了にして予定一覧から外す。
     /// </summary>
-    void CompleteWork()
+    void CompleteWork(bool completePlan)
     {
+        // 撮影を先に閉じる (メタファイルを確定させてからアップロード対象にする)
+        PlanCaptureService.Active?.End();
         _eyeCamera.StopCapture();
         ArDemoController.StopDemo();
 
@@ -116,6 +128,11 @@ public class WorkingPageController
             ThinningRatePercent = _plan.ThinningRatePercent,
             RangePoints = new List<Vector2>(_plan.RangePoints ?? new List<Vector2>()),
         });
+
+        if (completePlan)
+        {
+            PlanStore.Complete(_plan);
+        }
 
         _router.NavigateToHome();
     }

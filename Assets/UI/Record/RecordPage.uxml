@@ -19,7 +19,7 @@
             </ui:VisualElement>
         </ui:VisualElement>
 
-        <!-- 右側: ズームボタン -->
+        <!-- 右側: ズームボタン + 現在地ボタン -->
         <ui:VisualElement class="record__side-controls">
             <ui:VisualElement class="record__zoom-group">
                 <ui:Button name="zoom-in-button" class="record__zoom-button">
@@ -31,6 +31,12 @@
                     <ui:VisualElement class="record__zoom-icon record__zoom-icon--horizontal" />
                 </ui:Button>
             </ui:VisualElement>
+            <!-- 現在地へ移動 (白い同心円アイコンをVisualElement+USSで描画) -->
+            <ui:Button name="locate-button" class="record__locate-button">
+                <ui:VisualElement class="record__locate-ring">
+                    <ui:VisualElement class="record__locate-dot" />
+                </ui:VisualElement>
+            </ui:Button>
         </ui:VisualElement>
 
         <!-- 左下: レイヤー切替 (Googleマップ風プレビュー) -->

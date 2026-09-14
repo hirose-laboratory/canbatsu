@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using UnityEngine;
 using UnityEngine.Networking;
 using UnityEngine.UIElements;
@@ -40,13 +41,17 @@ public class MapView : VisualElement
     const int MinZoom = 5;
     const int MaxZoom = 17;
 
+    // 小班の下敷きポリゴンを描く最小ズーム (これ未満は細かすぎて潰れるので描画もヒットもしない)
+    const int MinForestZoom = 13;
+
     readonly MonoBehaviour _runner;
 
     // 地図の状態 (中心位置は現在ズームのワールドピクセル座標で持つ)
     double _centerX;
     double _centerY;
     int _zoom = 15;
-    BaseLayer _layer = BaseLayer.Photo;
+    // 既定は標準地図 (等高線入り)。林業の計画用途では地形が読める方が見やすい (2026-09-13ユーザー決定)
+    BaseLayer _layer = BaseLayer.Standard;
 
     // タイル管理
     readonly VisualElement _content;   // ピンチ中に拡大縮小をかける入れ物
@@ -69,8 +74,18 @@ public class MapView : VisualElement
     DisplayPolygon _selectedDisplayPolygon;
     Action _pendingFit; // レイアウト確定前にフィットが呼ばれたときの再実行用
 
-    /// <summary>表示専用ポリゴンがタップされたとき (何もない場所ならnull)。ポップアップ表示などに使う</summary>
+    // 小班の下敷きポリゴン (森林簿の境界表示。表示専用ポリゴンよりさらに下に淡く描く)
+    readonly List<DisplayPolygon> _forestPolygons = new List<DisplayPolygon>();
+
+    /// <summary>表示専用ポリゴンがタップされたとき (何もない場所ならnull)。ポップアップ表示などに使う。
+    /// 表示専用ポリゴンが無い場所では下敷きの小班ポリゴンも判定し、UserDataの型で受け側が区別する</summary>
     public event Action<DisplayPolygon> DisplayPolygonClicked;
+
+    /// <summary>ユーザーがパン/ズーム操作をしたとき。現在地への自動センタリングを止める判定に使う</summary>
+    public event Action UserInteracted;
+
+    /// <summary>表示範囲が変わったとき (パン終了・ズーム・SetCenter後)。可視範囲のデータ読込に使う</summary>
+    public event Action ViewChanged;
 
     // ポインタ管理 (マウス+マルチタッチ)
     readonly Dictionary<int, Vector2> _activePointers = new Dictionary<int, Vector2>();
@@ -80,6 +95,7 @@ public class MapView : VisualElement
     int _dragPointerId = -1;
     Vector2 _lastPointerPos;
     float _movedDistance;
+    bool _pannedThisDrag; // このドラッグで実際に地図が動いたか (パン終了時のViewChanged発火用)
 
     // ピンチ
     bool _pinching;
@@ -111,6 +127,7 @@ public class MapView : VisualElement
 
     public int PointCount => _polygon.Count;
     public BaseLayer CurrentLayer => _layer;
+    public int CurrentZoom => _zoom;
 
     /// <summary>編集中ポリゴンの頂点一覧 (x=経度, y=緯度)。保存時に使う</summary>
     public IReadOnlyList<Vector2> EditingPoints => _polygon;
@@ -155,6 +172,12 @@ public class MapView : VisualElement
         RegisterCallback<PointerUpEvent>(OnPointerUp);
         RegisterCallback<PointerCancelEvent>(evt => RemovePointer(evt.pointerId));
         RegisterCallback<WheelEvent>(OnWheel);
+
+        // 現在地の青ドットを追従させる (地図は操作時しか再描画しないので、位置が変わる分は定期的に描き直す)
+        schedule.Execute(() =>
+        {
+            if (LocationProvider.HasFix) _overlay.MarkDirtyRepaint();
+        }).Every(1000);
     }
 
     static void SetAbsoluteFill(VisualElement element)
@@ -173,7 +196,27 @@ public class MapView : VisualElement
         _zoom = Mathf.Clamp(zoom, MinZoom, MaxZoom);
         _centerX = LonToWorldX(longitude, _zoom);
         _centerY = LatToWorldY(latitude, _zoom);
+        ClearTileElements();
+        ClampCenter();
         RefreshTiles();
+        _overlay.MarkDirtyRepaint();
+        ViewChanged?.Invoke();
+    }
+
+    /// <summary>可視範囲の緯度経度 (森林簿の範囲読込などに使う)。レイアウト前は中心1点の範囲を返す</summary>
+    public (double minLat, double maxLat, double minLng, double maxLng) VisibleBounds()
+    {
+        float w = resolvedStyle.width;
+        float h = resolvedStyle.height;
+        if (w <= 0 || h <= 0 || float.IsNaN(w) || float.IsNaN(h)) { w = 0; h = 0; }
+
+        double topLeftX = _centerX - w / 2.0;
+        double topLeftY = _centerY - h / 2.0;
+        return (
+            minLat: WorldYToLat(topLeftY + h, _zoom), // 緯度は北ほどYが小さい
+            maxLat: WorldYToLat(topLeftY, _zoom),
+            minLng: WorldXToLon(topLeftX, _zoom),
+            maxLng: WorldXToLon(topLeftX + w, _zoom));
     }
 
     /// <summary>画面中央を基準に1段ズームイン (+ボタン用)</summary>
@@ -193,6 +236,9 @@ public class MapView : VisualElement
         int newZoom = Mathf.Clamp(_zoom + steps, MinZoom, MaxZoom);
         if (newZoom == _zoom) return;
 
+        // ZoomAtに来るのはボタン/ホイール/ダブルタップ、いずれもユーザー操作
+        UserInteracted?.Invoke();
+
         double scale = Math.Pow(2, newZoom - _zoom);
 
         // カーソル下の地点のワールド座標 → 新ズームで同じ画面位置に来るよう中心を再計算
@@ -206,6 +252,7 @@ public class MapView : VisualElement
         ClampCenter();
         RefreshTiles();
         _overlay.MarkDirtyRepaint();
+        ViewChanged?.Invoke();
     }
 
     public void SetLayer(BaseLayer layer)
@@ -222,6 +269,14 @@ public class MapView : VisualElement
         _displayPolygons.Clear();
         if (polygons != null) _displayPolygons.AddRange(polygons);
         _selectedDisplayPolygon = null;
+        _overlay.MarkDirtyRepaint();
+    }
+
+    /// <summary>小班の下敷きポリゴンを差し替える (表示専用ポリゴンより下に細く淡く描く)</summary>
+    public void SetForestPolygons(List<DisplayPolygon> polygons)
+    {
+        _forestPolygons.Clear();
+        if (polygons != null) _forestPolygons.AddRange(polygons);
         _overlay.MarkDirtyRepaint();
     }
 
@@ -280,6 +335,7 @@ public class MapView : VisualElement
                 ClampCenter();
                 RefreshTiles();
                 _overlay.MarkDirtyRepaint();
+                ViewChanged?.Invoke();
                 return;
             }
         }
@@ -391,6 +447,7 @@ public class MapView : VisualElement
             _dragPointerId = evt.pointerId;
             _lastPointerPos = pos;
             _movedDistance = 0;
+            _pannedThisDrag = false;
 
             // 頂点の上で押したなら長押しタイマーを開始 (450ms動かず押し続けたらドラッグモード)
             _candidateVertexIndex = AllowPointAdding ? FindVertexAt(pos) : -1;
@@ -466,6 +523,12 @@ public class MapView : VisualElement
             }
             else
             {
+                if (!_pannedThisDrag)
+                {
+                    // このドラッグで初めて地図が動いた瞬間だけ通知する
+                    _pannedThisDrag = true;
+                    UserInteracted?.Invoke();
+                }
                 _centerX -= delta.x;
                 _centerY -= delta.y;
                 ClampCenter();
@@ -517,6 +580,12 @@ public class MapView : VisualElement
         {
             _dragging = false;
             _dragPointerId = -1;
+            if (_pannedThisDrag && !_pinching)
+            {
+                // パン終了 (ピンチへ移行した場合はEndPinch側で発火する)
+                _pannedThisDrag = false;
+                ViewChanged?.Invoke();
+            }
         }
     }
 
@@ -552,7 +621,7 @@ public class MapView : VisualElement
                 _lastTapAddedVertex = true;
             }
         }
-        else if (_displayPolygons.Count > 0)
+        else if (_displayPolygons.Count > 0 || _forestPolygons.Count > 0)
         {
             // 表示専用ポリゴンのタップ判定 (上に描かれているものを優先)
             var (lon, lat) = ScreenToLonLat(tapPos);
@@ -566,6 +635,21 @@ public class MapView : VisualElement
                     break;
                 }
             }
+
+            // 表示専用に当たらなければ下敷きの小班を判定する (描画しないズームではヒットもしない)
+            if (hit == null && _zoom >= MinForestZoom)
+            {
+                for (int i = _forestPolygons.Count - 1; i >= 0; i--)
+                {
+                    var poly = _forestPolygons[i];
+                    if (poly.Points.Count >= 3 && PointInPolygon(lon, lat, poly.Points))
+                    {
+                        hit = poly;
+                        break;
+                    }
+                }
+            }
+
             _selectedDisplayPolygon = hit;
             _overlay.MarkDirtyRepaint();
             DisplayPolygonClicked?.Invoke(hit);
@@ -612,6 +696,8 @@ public class MapView : VisualElement
     {
         _dragging = false;
         _pinching = true;
+        _pannedThisDrag = false;
+        UserInteracted?.Invoke();
 
         var pts = GetTwoPointerPositions();
         _pinchStartDistance = Mathf.Max(1f, (pts.a - pts.b).magnitude);
@@ -674,6 +760,7 @@ public class MapView : VisualElement
         ClampCenter();
         RefreshTiles();
         _overlay.MarkDirtyRepaint();
+        ViewChanged?.Invoke();
     }
 
     void AddPointAt(Vector2 localPos)
@@ -781,7 +868,7 @@ public class MapView : VisualElement
                 string key = TileKey(_layer, _zoom, wrappedX, ty);
                 needed.Add(key);
                 var image = EnsureTileImage(key, TileUrl(_layer, _zoom, wrappedX, ty),
-                    _tileLayer, placeholder: true);
+                    TileCachePath(_layer, _zoom, wrappedX, ty), _tileLayer, placeholder: true);
                 image.style.left = left;
                 image.style.top = top;
 
@@ -790,7 +877,7 @@ public class MapView : VisualElement
                     string labelKey = $"Labels/{_zoom}/{wrappedX}/{ty}";
                     needed.Add(labelKey);
                     var labelImage = EnsureTileImage(labelKey, LabelTileUrl(_zoom, wrappedX, ty),
-                        _labelTileLayer, placeholder: false);
+                        LabelTileCachePath(_zoom, wrappedX, ty), _labelTileLayer, placeholder: false);
                     labelImage.style.left = left;
                     labelImage.style.top = top;
                 }
@@ -810,8 +897,8 @@ public class MapView : VisualElement
         }
     }
 
-    /// <summary>タイルのImage要素を用意する (無ければ生成してダウンロード開始)</summary>
-    Image EnsureTileImage(string key, string url, VisualElement parent, bool placeholder)
+    /// <summary>タイルのImage要素を用意する (メモリ→ディスク→ネットの順で読む)</summary>
+    Image EnsureTileImage(string key, string url, string cachePath, VisualElement parent, bool placeholder)
     {
         if (_tiles.TryGetValue(key, out var image)) return image;
 
@@ -831,17 +918,28 @@ public class MapView : VisualElement
         {
             image.image = cached;
         }
-        else if (_runner != null && !_loading.Contains(key))
+        else
         {
-            _loading.Add(key);
-            _runner.StartCoroutine(LoadTile(key, url));
+            // ディスクキャッシュ (タイルは数十KBなので同期読みでよい)。圏外でも保存済みなら表示できる
+            var diskTexture = LoadTileFromDisk(cachePath);
+            if (diskTexture != null)
+            {
+                _textureCache[key] = diskTexture;
+                image.image = diskTexture;
+            }
+            else if (_runner != null && !_loading.Contains(key))
+            {
+                _loading.Add(key);
+                _runner.StartCoroutine(LoadTile(key, url, cachePath));
+            }
         }
         return image;
     }
 
     static string TileKey(BaseLayer layer, int z, int x, int y) => $"{layer}/{z}/{x}/{y}";
 
-    static string TileUrl(BaseLayer layer, int z, int x, int y)
+    /// <summary>ベースタイルのURL (TilePrefetcherの先読みと共用)</summary>
+    public static string TileUrl(BaseLayer layer, int z, int x, int y)
     {
         return layer == BaseLayer.Photo
             ? $"https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg"
@@ -849,12 +947,63 @@ public class MapView : VisualElement
     }
 
     /// <summary>透過の地名タイル (白文字で暗い航空写真の上でも読める)。出典表示が必須</summary>
-    static string LabelTileUrl(int z, int x, int y)
+    public static string LabelTileUrl(int z, int x, int y)
     {
         return $"https://basemaps.cartocdn.com/dark_only_labels/{z}/{x}/{y}.png";
     }
 
-    IEnumerator LoadTile(string key, string url)
+    // ---- タイルのディスクキャッシュ (圏外対策。TilePrefetcherの先読みと同じ場所を使う) ----
+
+    /// <summary>ベースタイルのディスクキャッシュ先 (TilePrefetcherと共用)</summary>
+    public static string TileCachePath(BaseLayer layer, int z, int x, int y)
+    {
+        string ext = layer == BaseLayer.Photo ? "jpg" : "png";
+        return Path.Combine(Application.persistentDataPath, "tiles", layer.ToString(),
+            z.ToString(), x.ToString(), $"{y}.{ext}");
+    }
+
+    /// <summary>地名ラベルタイルのディスクキャッシュ先 (TilePrefetcherと共用)</summary>
+    public static string LabelTileCachePath(int z, int x, int y)
+    {
+        return Path.Combine(Application.persistentDataPath, "tiles", "labels",
+            z.ToString(), x.ToString(), $"{y}.png");
+    }
+
+    /// <summary>ディスクキャッシュから読む。無い・壊れているときはnull (ネットへフォールバック)</summary>
+    static Texture2D LoadTileFromDisk(string path)
+    {
+        try
+        {
+            if (!File.Exists(path)) return null;
+            var texture = new Texture2D(2, 2);
+            if (!texture.LoadImage(File.ReadAllBytes(path)))
+            {
+                UnityEngine.Object.Destroy(texture);
+                return null;
+            }
+            return texture;
+        }
+        catch
+        {
+            return null; // 読み損ねてもネットから取り直せばよい
+        }
+    }
+
+    /// <summary>ダウンロードしたタイルをディスクへ保存する (容量不足などで失敗しても表示は続ける)</summary>
+    static void SaveTileToDisk(string path, byte[] bytes)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path));
+            File.WriteAllBytes(path, bytes);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"タイルの保存に失敗: {e.Message}");
+        }
+    }
+
+    IEnumerator LoadTile(string key, string url, string cachePath)
     {
         using (var request = UnityWebRequestTexture.GetTexture(url))
         {
@@ -869,6 +1018,7 @@ public class MapView : VisualElement
                 {
                     image.image = texture;
                 }
+                SaveTileToDisk(cachePath, request.downloadHandler.data);
             }
         }
     }
@@ -877,7 +1027,9 @@ public class MapView : VisualElement
 
     void OnGenerateOverlay(MeshGenerationContext ctx)
     {
-        if (_polygon.Count == 0 && _displayPolygons.Count == 0) return;
+        // 描くものが何もない (現在地ドットも含めて) ときだけ抜ける
+        if (_polygon.Count == 0 && _displayPolygons.Count == 0 && _forestPolygons.Count == 0
+            && !LocationProvider.HasFix) return;
 
         float w = resolvedStyle.width;
         float h = resolvedStyle.height;
@@ -885,6 +1037,33 @@ public class MapView : VisualElement
         double topLeftY = _centerY - h / 2.0;
 
         var painter = ctx.painter2D;
+
+        // 小班の下敷きポリゴン (森林簿の境界。一番下に細い線で淡く描く。浅いズームでは省く)
+        if (_zoom >= MinForestZoom)
+        {
+            foreach (var poly in _forestPolygons)
+            {
+                if (poly.Points.Count < 3) continue;
+                bool selected = poly == _selectedDisplayPolygon;
+
+                painter.BeginPath();
+                for (int i = 0; i < poly.Points.Count; i++)
+                {
+                    var p = poly.Points[i];
+                    var sp = new Vector2(
+                        (float)(LonToWorldX(p.x, _zoom) - topLeftX),
+                        (float)(LatToWorldY(p.y, _zoom) - topLeftY));
+                    if (i == 0) painter.MoveTo(sp);
+                    else painter.LineTo(sp);
+                }
+                painter.ClosePath();
+                painter.fillColor = new Color(poly.Color.r, poly.Color.g, poly.Color.b, selected ? 0.2f : 0.1f);
+                painter.Fill();
+                painter.strokeColor = new Color(poly.Color.r, poly.Color.g, poly.Color.b, selected ? 1f : 0.8f);
+                painter.lineWidth = selected ? 2.5f : 1.5f;
+                painter.Stroke();
+            }
+        }
 
         // 表示専用ポリゴン (記録ページなどの色分け表示。頂点マーカーは付けない)
         foreach (var poly in _displayPolygons)
@@ -952,6 +1131,34 @@ public class MapView : VisualElement
             painter.strokeColor = green;
             painter.lineWidth = dragging ? 4f : 3f;
             painter.Stroke();
+        }
+
+        // 現在地の青ドット (一番上に描く。自分がどの位置にいるかを見るため)
+        if (LocationProvider.HasFix)
+        {
+            var dot = new Vector2(
+                (float)(LonToWorldX(LocationProvider.Longitude, _zoom) - topLeftX),
+                (float)(LatToWorldY(LocationProvider.Latitude, _zoom) - topLeftY));
+            // 画面のすこし外までは描く (端で欠けても自然に見えるように)
+            if (dot.x > -24f && dot.x < w + 24f && dot.y > -24f && dot.y < h + 24f)
+            {
+                var blue = new Color(0.20f, 0.47f, 0.96f);
+                // 精度の雰囲気を伝える淡い円 → 白フチ → 青ドット の順に重ねる (Googleマップと同じ見た目)
+                painter.BeginPath();
+                painter.Arc(dot, 22f, 0f, 360f);
+                painter.fillColor = new Color(blue.r, blue.g, blue.b, 0.15f);
+                painter.Fill();
+
+                painter.BeginPath();
+                painter.Arc(dot, 9f, 0f, 360f);
+                painter.fillColor = Color.white;
+                painter.Fill();
+
+                painter.BeginPath();
+                painter.Arc(dot, 6.5f, 0f, 360f);
+                painter.fillColor = blue;
+                painter.Fill();
+            }
         }
     }
 

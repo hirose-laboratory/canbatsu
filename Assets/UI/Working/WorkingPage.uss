@@ -134,3 +134,43 @@
 .working__finish-button:hover {
     background-color: rgb(253, 243, 242);
 }
+
+/* ---- 作業終了ダイアログの縦積みボタン ---- */
+
+/* 3択なので縦に積む (共通の .dialog__buttons は横並びのため使わない) */
+.working__finish-buttons {
+    flex-direction: column;
+}
+
+.working__finish-choice {
+    height: 46px;
+    margin: 0 0 8px 0;
+    border-radius: 8px;
+    font-size: 15px;
+}
+
+/* 記録して完了: 計画ごと終える操作。塗りつぶしの「続ける」と区別するため緑の枠にする */
+.working__finish-choice--complete {
+    border-width: 1px;
+    border-color: rgb(27, 152, 60);
+    background-color: rgb(255, 255, 255);
+    color: rgb(27, 152, 60);
+}
+
+.working__finish-choice--complete:hover {
+    background-color: rgb(244, 250, 245);
+}
+
+/* キャンセル (共通の .dialog__cancel はflex調整が縦積みと合わないため見た目だけ揃えて自前で持つ) */
+.working__finish-choice--cancel {
+    margin-bottom: 0;
+    border-width: 1px;
+    border-color: rgb(180, 180, 180);
+    background-color: rgb(255, 255, 255);
+    color: rgb(80, 80, 80);
+    font-size: 14px;
+}
+
+.working__finish-choice--cancel:hover {
+    background-color: rgb(246, 246, 246);
+}

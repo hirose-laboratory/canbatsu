@@ -8,6 +8,7 @@
 
 .app-shell__header {
     height: 56px;
+    flex-shrink: 0; /* 中身 (ページ) が大きくてもヘッダーは絶対に潰さない */
     background-color: rgb(255, 255, 255);
     flex-direction: row;
     align-items: center;
@@ -122,6 +123,10 @@
 
 .app-shell__content {
     flex-grow: 1;
+    /* flexの子は既定で「最小=中身の高さ」なので、計画カードが多いと中身に合わせて伸びて
+       ヘッダー/タブバーを押し潰す。min-height:0で「余った高さだけ使う」に変える (スクロールはページ内のScrollViewが担当) */
+    min-height: 0;
+    overflow: hidden;
 }
 
 /* ---- 下部タブバー (予定 / 記録 の2タブ) ---- */
@@ -129,6 +134,7 @@
 .app-shell__tab-bar {
     flex-direction: row;
     height: 60px;
+    flex-shrink: 0; /* ヘッダーと同じく圧縮させない */
     background-color: rgb(255, 255, 255);
     border-top-width: 1px;
     border-top-color: rgb(180, 180, 180);

@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using UnityEngine.UIElements;
 
 /// <summary>
@@ -15,6 +14,7 @@ public class HomePageController
     readonly VisualElement _startDialog;
     readonly VisualElement _editDialog;
     readonly PlanFormView _editForm;
+    readonly Label _syncNote;
 
     WorkPlan _dialogPlan;  // 作業開始ダイアログで表示中の計画
     WorkPlan _editingPlan; // 編集ダイアログで表示中の計画
@@ -45,7 +45,34 @@ public class HomePageController
             if (evt.target == _editDialog) HideEditDialog();
         });
 
+        // 同期系の進捗 (地図タイルの取り込み / 作業画像のアップロード) をまとめて1行に出す
+        _syncNote = page.Q<Label>("map-sync-note");
+        TilePrefetcher.ProgressChanged += RefreshSyncNote;
+        CaptureUploader.StatusChanged += RefreshSyncNote;
+        // ページ遷移のたびにUXMLごと作り直されるため、破棄時にstaticイベントの購読を外す (リーク防止)
+        page.RegisterCallback<DetachFromPanelEvent>(_ =>
+        {
+            TilePrefetcher.ProgressChanged -= RefreshSyncNote;
+            CaptureUploader.StatusChanged -= RefreshSyncNote;
+        });
+        RefreshSyncNote();
+
+        // 作業で撮り溜めた画像の未送信分があれば送りにいく (Wi-Fi接続時のみ。ホームに戻るたびに再挑戦)
+        CaptureUploader.KickUploadPending(router);
+
         Refresh();
+    }
+
+    /// <summary>同期系の進捗表示を更新する (何か動いているときだけ出す)</summary>
+    void RefreshSyncNote()
+    {
+        string tiles = TilePrefetcher.StatusText;
+        string upload = CaptureUploader.Status;
+        string text = string.IsNullOrEmpty(tiles) ? upload
+            : string.IsNullOrEmpty(upload) ? tiles
+            : $"{tiles} / {upload}";
+        _syncNote.text = text;
+        _syncNote.style.display = string.IsNullOrEmpty(text) ? DisplayStyle.None : DisplayStyle.Flex;
     }
 
     /// <summary>データからUIを作り直す (手動再レンダリング)</summary>
@@ -56,9 +83,10 @@ public class HomePageController
         var addButton = _page.Q<Button>("add-plan-button");
 
         var today = DateTime.Today;
-        // 作業記録が付いた計画は「作業済み」なので予定には出さない (記録ページのオレンジ側で見る)
-        var todayPlans = WithoutRecords(PlanStore.GetByDate(today));
-        var futurePlans = WithoutRecords(PlanStore.GetAfter(today));
+        // 記録の有無ではなく計画の状態 (active/completed) で振り分ける = 完了するまで同じ計画を使い回せる。
+        // 期日を過ぎた進行中計画も継続作業として「今日の作業計画」に出す
+        var todayPlans = PlanStore.GetActiveDue(today);
+        var futurePlans = PlanStore.GetActiveAfter(today);
         var hasPlans = todayPlans.Count > 0 || futurePlans.Count > 0;
 
         // 計画の有無で「空の状態」と「一覧」を切り替える
@@ -75,9 +103,6 @@ public class HomePageController
         RefreshSection("today-section-title", "today-plan-list", todayPlans, ShowStartDialog);
         RefreshSection("future-section-title", "future-plan-list", futurePlans, null);
     }
-
-    static List<WorkPlan> WithoutRecords(List<WorkPlan> plans)
-        => plans.Where(p => !RecordStore.HasRecordForPlan(p.Id)).ToList();
 
     /// <summary>セクション1つ分を作り直す。計画が無いセクションはタイトルごと隠す</summary>
     void RefreshSection(string titleName, string listName,
@@ -109,6 +134,12 @@ public class HomePageController
         AddDialogRow(rows, "樹種", plan.Species ?? "-");
         AddDialogRow(rows, "間伐率", $"{plan.ThinningRatePercent}%");
         AddDialogRow(rows, "対象面積", $"{plan.AreaHa:0.0#}ha");
+
+        // 継続中 (記録あり) の計画は何回目の作業を始めるのかを知らせる
+        int recordCount = RecordStore.GetByPlan(plan.Id).Count;
+        _page.Q<Label>("dialog-note").text = recordCount > 0
+            ? $"{recordCount + 1}回目の作業を開始します"
+            : "開始するとARグラス連携モードに切り替わります (完全オフラインで動作)";
 
         _startDialog.style.display = DisplayStyle.Flex;
     }

@@ -7,7 +7,19 @@ using UnityEngine;
 /// </summary>
 public class WorkPlan
 {
+    /// <summary>状態: 進行中。予定一覧に出て、記録を付けても完了するまで使い回せる</summary>
+    public const string StatusActive = "active";
+
+    /// <summary>状態: 完了。予定一覧に出ない (作業終了時に「記録して完了」を選ぶとこうなる)</summary>
+    public const string StatusCompleted = "completed";
+
     public string Id = Guid.NewGuid().ToString();
+
+    /// <summary>計画の状態 (active / completed)</summary>
+    public string Status = StatusActive;
+
+    /// <summary>完了済みかどうか</summary>
+    public bool IsCompleted => Status == StatusCompleted;
 
     /// <summary>作業予定日</summary>
     public DateTime Date;

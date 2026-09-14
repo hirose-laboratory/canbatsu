@@ -22,6 +22,7 @@ public class PlanCreatePageController
     readonly Button _undoButton;
     readonly Button _confirmButton;
     readonly Button _layerButton;
+    readonly Button _locateButton;
     readonly Image _layerThumbImage;
     readonly Label _layerThumbLabel;
     readonly VisualElement _resultSheet;
@@ -31,15 +32,32 @@ public class PlanCreatePageController
     double _areaHa; // 面積はフォームではなくポリゴンから計算する
     int _fetchVersion; // 範囲を確定し直したとき、前の森林簿検索の結果を捨てるための番号
 
+    // 現在地への自動センタリング (最初のFixが来るまで、ユーザーが地図を触るまで)
+    bool _userMovedMap;
+    bool _autoCentered;
+
     public PlanCreatePageController(VisualElement page, AppRouter router, WorkPlan editingPlan = null)
     {
         _page = page;
         _router = router;
         _editingPlan = editingPlan;
 
-        // 地図を生成して差し込む (吉野杉で有名な奈良県吉野の山地を初期表示)
+        // 現在地の取得を開始する (権限拒否やエディタではHasFix=falseのままフォールバックが効く)
+        var location = router.GetComponent<LocationProvider>();
+        if (location == null) location = router.gameObject.AddComponent<LocationProvider>();
+        location.StartUpdates();
+
+        // 地図を生成して差し込む。Fix済みなら現在地、無ければ吉野の山地 (吉野杉で有名) を初期表示
         _map = new MapView(router);
-        _map.SetCenter(34.3766, 135.9058, 15);
+        if (LocationProvider.HasFix)
+        {
+            _map.SetCenter(LocationProvider.Latitude, LocationProvider.Longitude, 15);
+            _autoCentered = true;
+        }
+        else
+        {
+            _map.SetCenter(34.3766, 135.9058, 15);
+        }
         page.Q<VisualElement>("map-container").Add(_map);
 
         // 編集モード: 既存の範囲を載せて、その範囲が見える位置へ移動する
@@ -49,10 +67,24 @@ public class PlanCreatePageController
             _map.FitToPoints(_editingPlan.RangePoints);
         }
         _map.PolygonChanged += OnPolygonChanged;
+        _map.UserInteracted += () => _userMovedMap = true;
+
+        // 最初のFixが「まだ地図を触っていない間」に来たら一度だけ現在地へ寄せる
+        // (編集モードは既存範囲を見せたままにするので寄せない)
+        if (!_autoCentered && _editingPlan == null)
+        {
+            page.schedule.Execute(() =>
+            {
+                if (_autoCentered || _userMovedMap || !LocationProvider.HasFix) return;
+                _autoCentered = true;
+                _map.SetCenter(LocationProvider.Latitude, LocationProvider.Longitude, 15);
+            }).Every(1000).Until(() => _autoCentered || _userMovedMap);
+        }
 
         _undoButton = page.Q<Button>("undo-button");
         _confirmButton = page.Q<Button>("confirm-button");
         _layerButton = page.Q<Button>("layer-button");
+        _locateButton = page.Q<Button>("locate-button");
         _layerThumbImage = page.Q<Image>("layer-thumb-image");
         _layerThumbLabel = page.Q<Label>("layer-thumb-label");
         _resultSheet = page.Q<VisualElement>("result-sheet");
@@ -63,6 +95,7 @@ public class PlanCreatePageController
         page.Q<Button>("zoom-in-button").clicked += _map.ZoomIn;
         page.Q<Button>("zoom-out-button").clicked += _map.ZoomOut;
         _layerButton.clicked += ToggleLayer;
+        _locateButton.clicked += OnLocateClicked;
         _undoButton.clicked += _map.RemoveLastPoint;
         _confirmButton.clicked += ConfirmSelection;
         page.Q<Button>("cancel-button").clicked += ReopenSelection;
@@ -75,6 +108,21 @@ public class PlanCreatePageController
 
         UpdateLayerButton();
         OnPolygonChanged();
+    }
+
+    /// <summary>現在地ボタン: Fixがあれば現在地へ移動、無ければ一瞬無効化して取得中であることを伝える</summary>
+    void OnLocateClicked()
+    {
+        if (LocationProvider.HasFix)
+        {
+            _userMovedMap = true; // 自分で現在地へ動かしたので以後の自動センタリングは不要
+            _map.SetCenter(LocationProvider.Latitude, LocationProvider.Longitude, _map.CurrentZoom);
+        }
+        else
+        {
+            _locateButton.SetEnabled(false);
+            _page.schedule.Execute(() => _locateButton.SetEnabled(true)).StartingIn(1200);
+        }
     }
 
     /// <summary>航空写真 ⇔ 標準地図 の切替</summary>
@@ -193,6 +241,8 @@ public class PlanCreatePageController
 
     void SavePlan()
     {
+        var rangePoints = new List<UnityEngine.Vector2>(_map.EditingPoints);
+
         if (_editingPlan != null)
         {
             // 編集モード: 既存計画を上書きする
@@ -202,7 +252,7 @@ public class PlanCreatePageController
             _editingPlan.AreaHa = (float)_areaHa;
             _editingPlan.FellingIntervalM = _form.IntervalM;
             _editingPlan.FellingStandardCm = _form.StandardCm;
-            _editingPlan.RangePoints = new List<UnityEngine.Vector2>(_map.EditingPoints);
+            _editingPlan.RangePoints = rangePoints;
             PlanStore.Update(_editingPlan);
         }
         else
@@ -215,9 +265,12 @@ public class PlanCreatePageController
                 AreaHa = (float)_areaHa,
                 FellingIntervalM = _form.IntervalM,
                 FellingStandardCm = _form.StandardCm,
-                RangePoints = new List<UnityEngine.Vector2>(_map.EditingPoints),
+                RangePoints = rangePoints,
             });
         }
+
+        // 計画範囲の地図タイルを先読みする (山中の圏外でも地図が出るように。_routerは遷移後も生きている)
+        TilePrefetcher.Prefetch(_router, rangePoints);
 
         _router.NavigateToHome();
     }

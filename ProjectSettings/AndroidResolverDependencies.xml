@@ -8,6 +8,8 @@
     <package>com.google.firebase:firebase-common:22.2.0</package>
     <package>com.google.firebase:firebase-firestore:26.5.0</package>
     <package>com.google.firebase:firebase-firestore-unity:13.15.0</package>
+    <package>com.google.firebase:firebase-storage:22.0.1</package>
+    <package>com.google.firebase:firebase-storage-unity:13.15.0</package>
   </packages>
   <files>
     <file>Assets/GeneratedLocalRepo/Firebase/m2repository/com/google/firebase/firebase-app-unity/13.15.0/firebase-app-unity-13.15.0.aar</file>
@@ -16,6 +18,8 @@
     <file>Assets/GeneratedLocalRepo/Firebase/m2repository/com/google/firebase/firebase-auth-unity/13.15.0/firebase-auth-unity-13.15.0.pom</file>
     <file>Assets/GeneratedLocalRepo/Firebase/m2repository/com/google/firebase/firebase-firestore-unity/13.15.0/firebase-firestore-unity-13.15.0.aar</file>
     <file>Assets/GeneratedLocalRepo/Firebase/m2repository/com/google/firebase/firebase-firestore-unity/13.15.0/firebase-firestore-unity-13.15.0.pom</file>
+    <file>Assets/GeneratedLocalRepo/Firebase/m2repository/com/google/firebase/firebase-storage-unity/13.15.0/firebase-storage-unity-13.15.0.aar</file>
+    <file>Assets/GeneratedLocalRepo/Firebase/m2repository/com/google/firebase/firebase-storage-unity/13.15.0/firebase-storage-unity-13.15.0.pom</file>
   </files>
   <settings>
     <setting name="androidAbis" value="arm64-v8a" />

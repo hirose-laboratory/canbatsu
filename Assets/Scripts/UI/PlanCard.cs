@@ -48,6 +48,15 @@ public static class PlanCard
             header.Add(species);
         }
 
+        // 記録が付いた進行中計画は「継続中」バッジで作業回数を示す (使い回し中だと分かるように)
+        int recordCount = RecordStore.GetByPlan(plan.Id).Count;
+        if (recordCount > 0 && !plan.IsCompleted)
+        {
+            var badge = new Label($"継続中·{recordCount}回");
+            badge.AddToClassList("plan-card__badge");
+            header.Add(badge);
+        }
+
         var spacer = new VisualElement();
         spacer.AddToClassList("plan-card__spacer");
         header.Add(spacer);

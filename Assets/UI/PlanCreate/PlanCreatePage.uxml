@@ -24,7 +24,7 @@
         <!-- 頂点を戻すボタン (ガイドの下) -->
         <ui:Button name="undo-button" text="頂点を1つ戻す" class="plan-create__undo-button" />
 
-        <!-- 右側: ズームボタン (Googleマップ風) -->
+        <!-- 右側: ズームボタン (Googleマップ風) + 現在地ボタン -->
         <ui:VisualElement class="plan-create__side-controls">
             <ui:VisualElement class="plan-create__zoom-group">
                 <ui:Button name="zoom-in-button" class="plan-create__zoom-button">
@@ -36,6 +36,12 @@
                     <ui:VisualElement class="plan-create__zoom-icon plan-create__zoom-icon--horizontal" />
                 </ui:Button>
             </ui:VisualElement>
+            <!-- 現在地へ移動 (白い同心円アイコンをVisualElement+USSで描画) -->
+            <ui:Button name="locate-button" class="plan-create__locate-button">
+                <ui:VisualElement class="plan-create__locate-ring">
+                    <ui:VisualElement class="plan-create__locate-dot" />
+                </ui:VisualElement>
+            </ui:Button>
         </ui:VisualElement>
 
         <!-- 左下: レイヤー切替 (Googleマップと同じ、切替先地図の小さなプレビュー) -->

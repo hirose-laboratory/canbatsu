@@ -31,15 +31,19 @@
 
         </ui:VisualElement>
 
-        <!-- 作業終了の確認ダイアログ (誤タップ防止) -->
+        <!-- 作業終了ダイアログ: 記録だけ付けて計画を続けるか、計画ごと完了するかを選ぶ -->
         <ui:VisualElement name="finish-dialog" class="dialog-scrim">
             <ui:VisualElement class="dialog">
-                <ui:Label text="作業を終了しますか?" class="dialog__title" />
-                <ui:Label text="終了すると今日の予定から外れ、記録ページに作業記録として保存されます"
-                          class="dialog__note" />
-                <ui:VisualElement class="dialog__buttons">
-                    <ui:Button name="finish-cancel-button" text="キャンセル" class="dialog__cancel" />
-                    <ui:Button name="finish-confirm-button" text="終了する" class="button-primary dialog__confirm" />
+                <ui:Label text="今日の作業を終了しますか?" class="dialog__title" />
+                <ui:Label text="記録は計画に紐づいて保存されます" class="dialog__note" />
+                <!-- 選択肢が3つあるため縦積み (共通の .dialog__buttons は横並びなので使わない) -->
+                <ui:VisualElement class="working__finish-buttons">
+                    <ui:Button name="finish-continue-button" text="記録して続ける"
+                               class="button-primary working__finish-choice" />
+                    <ui:Button name="finish-complete-button" text="記録して完了"
+                               class="working__finish-choice working__finish-choice--complete" />
+                    <ui:Button name="finish-cancel-button" text="キャンセル"
+                               class="working__finish-choice working__finish-choice--cancel" />
                 </ui:VisualElement>
             </ui:VisualElement>
         </ui:VisualElement>
