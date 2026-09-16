@@ -15,6 +15,7 @@ namespace CanbatsuMS
         public float WidthMeters;     // 幹の太さ概算 [m](前面の点のみなので過小気味)
         public bool IsTooClose;       // 他の木と近すぎる
         public bool IsManual;         // 手動タグ付けされた木(うなずき操作)
+        public int SeenCount;         // ML検出で確認された回数(MlTreeTrackerが使用。2回以上で表示=幽霊対策)
         public Vector3 TrunkBase => new Vector3(X, GroundY, Z);
 
         public float HorizontalDistanceFrom(Vector3 p)

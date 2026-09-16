@@ -2,7 +2,8 @@
     "name": "CanbatsuMS",
     "rootNamespace": "CanbatsuMS",
     "references": [
-        "Unity.XR.XREAL"
+        "Unity.XR.XREAL",
+        "Unity.InferenceEngine"
     ],
     "includePlatforms": [],
     "excludePlatforms": [],
