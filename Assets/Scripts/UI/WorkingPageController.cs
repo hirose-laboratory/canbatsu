@@ -23,6 +23,9 @@ public class WorkingPageController
         _plan = plan;
         _finishDialog = page.Q<VisualElement>("finish-dialog");
 
+        // グラス側 (ArDemoController) が作業中の計画を参照できるようにIDを渡す
+        ArDemoController.CurrentPlanId = plan.Id;
+
         // 先にグラス側のAR (XRセッション+デモ表示) を起動し、その後カメラを開く
         // (カメラはXR起動後でないと開けないため。スマホ画面はこのページのまま)
         try
@@ -82,6 +85,10 @@ public class WorkingPageController
         AddRow(summary, "しきい値 (伐採間隔)", $"{plan.FellingIntervalM:0.0}m");
         AddRow(summary, "対象面積", $"{plan.AreaHa:0.0#}ha");
 
+        // ARグラス操作の代替ボタン (音声「きじゅん」「マーク」が使えないときの手元操作。結果はグラスのHUDに出る)
+        page.Q<Button>("anchor-button").clicked += () => ArDemoController.SetAnchorHere();
+        page.Q<Button>("mark-button").clicked += () => ArDemoController.MarkTreeAtGaze();
+
         // 誤タップ防止のためダイアログを挟む (記録して続ける / 記録して完了 / キャンセルの3択)
         page.Q<Button>("finish-button").clicked += ShowFinishDialog;
         page.Q<Button>("finish-cancel-button").clicked += HideFinishDialog;
@@ -118,6 +125,7 @@ public class WorkingPageController
         PlanCaptureService.Active?.End();
         _eyeCamera.StopCapture();
         ArDemoController.StopDemo();
+        ArDemoController.CurrentPlanId = null; // 作業を抜けるので計画IDを外す
 
         RecordStore.Add(new WorkRecord
         {

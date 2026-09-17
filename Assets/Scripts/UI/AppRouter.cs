@@ -28,6 +28,7 @@ public class AppRouter : MonoBehaviour
     Label _voiceToast;
     IVisualElementScheduledItem _toastHider;
     VoiceCommandService _voice;
+    bool _onWorkingPage; // 作業中ページを開いているか (音声コマンドの解釈を選木用に切り替える)
 
     const string ActiveTabClass = "app-shell__tab--active";
     const string VoicePrefKey = "voice_commands_enabled";
@@ -126,7 +127,17 @@ public class AppRouter : MonoBehaviour
     /// <summary>聞き取ったテキストをコマンドとして解釈する</summary>
     void OnVoicePhrase(string text)
     {
-        // ログイン前や作業中ページ (ヘッダー非表示の画面) では誤操作防止のため反応しない
+        // 作業中ページでは選木コマンドだけを受け付ける (誤操作防止のためページ遷移コマンドは無効のまま。
+        // 操作結果のフィードバックはグラス側HUDに出るのでトーストは出さない)
+        if (_onWorkingPage)
+        {
+            if (ContainsAny(text, "マーク", "まーく")) ArDemoController.MarkTreeAtGaze();
+            else if (ContainsAny(text, "とりけし", "取り消し")) ArDemoController.UnmarkTreeAtGaze();
+            else if (ContainsAny(text, "きじゅん", "基準")) ArDemoController.SetAnchorHere();
+            return;
+        }
+
+        // ログイン前など (ヘッダー非表示の画面) では誤操作防止のため反応しない
         if (_header.resolvedStyle.display == DisplayStyle.None) return;
 
         if (ContainsAny(text, "記録", "きろく", "キロク"))
@@ -164,6 +175,7 @@ public class AppRouter : MonoBehaviour
 
     public void NavigateToLogin()
     {
+        _onWorkingPage = false;
         SetChromeVisible(false);
         var page = ShowPage(loginPage);
         if (page == null) return;
@@ -173,6 +185,7 @@ public class AppRouter : MonoBehaviour
     /// <summary>予定ページ (ホーム)</summary>
     public void NavigateToHome()
     {
+        _onWorkingPage = false;
         SetChromeVisible(true);
         SetActiveTab(_tabSchedule);
         var page = ShowPage(homePage);
@@ -183,6 +196,7 @@ public class AppRouter : MonoBehaviour
     /// <summary>作業計画の新規作成 (地図で範囲選択)。Googleマップ風に全画面表示</summary>
     public void NavigateToPlanCreate()
     {
+        _onWorkingPage = false;
         SetChromeVisible(false);
         var page = ShowPage(planCreatePage);
         if (page == null) return;
@@ -192,6 +206,7 @@ public class AppRouter : MonoBehaviour
     /// <summary>既存計画の範囲を地図で再設定する (計画作成ページを編集モードで開く)</summary>
     public void NavigateToPlanEdit(WorkPlan plan)
     {
+        _onWorkingPage = false;
         SetChromeVisible(false);
         var page = ShowPage(planCreatePage);
         if (page == null) return;
@@ -201,14 +216,19 @@ public class AppRouter : MonoBehaviour
     /// <summary>作業中ページ (ARグラス連携モード)。タブバーも隠して全画面表示</summary>
     public void NavigateToWorking(WorkPlan plan)
     {
+        _onWorkingPage = false;
         SetChromeVisible(false);
         var page = ShowPage(workingPage);
         if (page == null) return;
+        _onWorkingPage = true;
+        // AR側が保存済みマップの読み込み・選木の保存に使う計画IDを、AR起動より先に渡す
+        ArDemoController.CurrentPlanId = plan?.Id;
         _ = new WorkingPageController(page, this, plan);
     }
 
     public void NavigateToRecord()
     {
+        _onWorkingPage = false;
         SetChromeVisible(true);
         SetActiveTab(_tabRecord);
         var page = ShowPage(recordPage);

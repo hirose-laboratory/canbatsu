@@ -118,6 +118,41 @@
     margin-bottom: 24px;
 }
 
+/* ---- ARグラス操作の代替ボタン (基準点 / マーク) ---- */
+
+.working__ar-actions {
+    flex-direction: row;
+    align-self: stretch;
+    margin-bottom: 12px;
+}
+
+.working__ar-action {
+    flex-grow: 1;
+    height: 44px;
+    margin: 0 4px;
+    border-width: 1px;
+    border-color: rgb(27, 152, 60);
+    border-radius: 22px;
+    background-color: rgb(255, 255, 255);
+    color: rgb(27, 152, 60);
+    font-size: 14px;
+    -unity-font-style: bold;
+}
+
+.working__ar-action:hover {
+    background-color: rgb(244, 250, 245);
+}
+
+/* マーク = 伐採対象の指定なので赤系で区別する */
+.working__ar-action--mark {
+    border-color: rgb(210, 90, 80);
+    color: rgb(200, 60, 50);
+}
+
+.working__ar-action--mark:hover {
+    background-color: rgb(253, 243, 242);
+}
+
 .working__finish-button {
     align-self: stretch;
     height: 48px;

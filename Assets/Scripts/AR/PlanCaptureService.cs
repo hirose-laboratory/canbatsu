@@ -74,6 +74,25 @@ public class PlanCaptureService : MonoBehaviour
         Destroy(this);
     }
 
+    /// <summary>
+    /// このセッションの基準点 (位置+yaw) を anchor.json に残す。
+    /// サーバー側の3Dマップ化が「セッション座標系→計画のマップ座標系」の変換に使う。
+    /// 基準点をセットし直したら上書きされる (最後の基準点が有効)。
+    /// </summary>
+    public void WriteAnchor(Vector3 anchorPos, float anchorYawRad)
+    {
+        try
+        {
+            string json = FormattableString.Invariant(
+                $"{{\"pos\":[{anchorPos.x:F5},{anchorPos.y:F5},{anchorPos.z:F5}],\"yawRad\":{anchorYawRad:F6}}}");
+            File.WriteAllText(Path.Combine(SessionDir, "anchor.json"), json);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"基準点の保存に失敗しました: {e.Message}");
+        }
+    }
+
     void Update()
     {
         if (Time.unscaledTime < _nextCaptureAt) return;

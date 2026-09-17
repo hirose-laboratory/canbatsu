@@ -33,11 +33,47 @@ public class ArDemoController : MonoBehaviour
     int _measureCount;  // 成功した計測の回数 (HUD表示用)
     GameObject _hudRoot; // HUDはカメラの子なので_workRootと別に破棄する
 
+    // ---- 選木・基準点・再訪復元の状態 ----
+
+    /// <summary>選木1本分 (セッション座標で保持し、保存時にマップ座標へ変換する)</summary>
+    class SelectedTree
+    {
+        public Vector3 SessionPos; // 幹の足元 (セッション座標)
+        public int WidthCm;        // 幹の太さ概算 [cm]
+    }
+
+    readonly List<SelectedTree> _selected = new List<SelectedTree>();
+    List<MsTree> _latestTrees = new List<MsTree>(); // 直近の検出リスト (視線選木の対象)
+    Vector3 _latestMeasureCamPos;                   // 直近計測時のカメラ位置 (マーカー再構築用)
+
+    // 基準点: マップ座標系 = 基準点を原点、基準方向 (yawのXZ投影) を+Z、yは基準点からの相対
+    bool _anchorSet;
+    Vector3 _anchorPos;
+    float _anchorYawRad;
+    MsMapTransform _mapToSession; // マップ→セッション変換 (幹マップ照合が成功すると精密版に置き換わる)
+
+    List<PlanTreeStore.PlanTree> _savedTrees; // この計画の保存済みマップ (読み込み完了までnull)
+    readonly List<(GameObject root, TextMesh label, Vector3 mapPos)> _restoredMarkers =
+        new List<(GameObject, TextMesh, Vector3)>(); // 前回の選木の復元マーカー (_markersと別に管理)
+
+    string _alignStatus = "";  // 幹マップ照合の結果表示 (成功したときだけ更新)
+    string _feedbackText = ""; // 音声/操作の結果フィードバック (3秒で消える)
+    float _feedbackUntil;
+
+    /// <summary>同じ木とみなす水平距離 [m] (選木のトグル判定・保存時の重複除去に使う)</summary>
+    const float SameTreeRadius = 0.6f;
+
+    static readonly Color SelectedColor = new Color(0.9f, 0.24f, 0.2f);   // 選木=赤
+    static readonly Color RestoredColor = new Color(0.3f, 0.75f, 0.95f);  // 前回の選木=水色
+
+    /// <summary>ARカメラ (グラス側の視点)。AR未起動ならnull</summary>
+    public static Camera HeadCamera => _instance != null ? _instance._arCamera : null;
+
+    /// <summary>作業中の計画ID。作業ページへの遷移時に設定され、BeginWorkで保存済みマップの読み込みに使う</summary>
+    public static string CurrentPlanId;
+
     /// <summary>モーションステレオの直近の計測距離 (m)。未計測なら -1</summary>
     public static float LatestDistanceMeters { get; private set; } = -1f;
-
-    /// <summary>ARカメラ (グラス側の視点)。作業画像の姿勢記録 (PlanCaptureService) が使う。AR未起動ならnull</summary>
-    public static Camera HeadCamera => _instance != null ? _instance._arCamera : null;
 
     /// <summary>モーションステレオの状態と直近結果 (診断表示用)。計測停止中なら空文字</summary>
     public static string MeasurementStatus =>
@@ -104,11 +140,16 @@ public class ArDemoController : MonoBehaviour
 
         BuildStatusBoard();
         BuildMotionStereo();
+
+        // 再訪復元用: この計画の保存済みマップを裏で読み始める (基準点セット時に使う)
+        _savedTrees = null;
+        if (!string.IsNullOrEmpty(CurrentPlanId)) LoadSavedMapAsync(CurrentPlanId);
     }
 
     void EndWork()
     {
         if (_workRoot == null) return;
+        SaveTreeMap(); // 終了時点の検出と選木を保存する (基準点セット済みのときだけ)
         Destroy(_workRoot); // マーカー・MotionStereoはこの下にいるので一括で片付く
         Application.onBeforeRender -= UpdateHudPose;
         if (_hudRoot != null) Destroy(_hudRoot); // HUDは_workRootの外なので別に破棄する
@@ -121,6 +162,28 @@ public class ArDemoController : MonoBehaviour
         _treeCount = 0;
         _tooCloseCount = 0;
         _measureCount = 0;
+        _selected.Clear();
+        _latestTrees.Clear();
+        _restoredMarkers.Clear(); // 実体は_workRoot下なので破棄済み
+        _savedTrees = null;
+        _anchorSet = false;
+        _alignStatus = "";
+        _feedbackText = "";
+    }
+
+    /// <summary>保存済みマップを裏で読み込む (BeginWorkから。完了時に作業が続いていれば反映する)</summary>
+    async void LoadSavedMapAsync(string planId)
+    {
+        var trees = await PlanTreeStore.LoadAsync(planId);
+        // 読み込み中に作業が終わった/別の計画に変わっていたら捨てる
+        if (_workRoot == null || planId != CurrentPlanId) return;
+        _savedTrees = trees;
+        // 基準点が先にセットされていたら、この時点で復元マーカーを出す
+        if (_anchorSet)
+        {
+            int n = RebuildRestoredMarkers();
+            if (n > 0) ShowFeedback($"前回の選木{n}本を復元");
+        }
     }
 
     /// <summary>視界内でのHUDの位置: 右上 (選木の視界を塞がないように)。1.6m先の右上隅</summary>
@@ -175,6 +238,10 @@ public class ArDemoController : MonoBehaviour
             {
                 if (marker.label != null) BillboardToCamera(marker.label.transform);
             }
+            foreach (var marker in _restoredMarkers)
+            {
+                if (marker.label != null) BillboardToCamera(marker.label.transform);
+            }
         }
 
         if (_statusText == null) return;
@@ -196,12 +263,53 @@ public class ArDemoController : MonoBehaviour
             detectLine = "<size=56><color=#BBBBBB>● 検出待ち (まだ計測なし)</color></size>";
         }
 
+        // 選木の本数 (前回分は基準点セット後だけ意味を持つ)
+        string selectionLine = $"選木: {_selected.Count}本";
+        int restoredSelected = CountSavedSelected();
+        if (_anchorSet && restoredSelected > 0) selectionLine += $" (前回{restoredSelected}本)";
+
+        string extraLines = $"\n<size=34>{selectionLine}</size>";
+        if (!_anchorSet && _selected.Count > 0)
+        {
+            // 基準点がないとマップ座標に変換できず保存されないことを知らせる
+            extraLines += "\n<size=30><color=#FFD24C>基準点未セット (保存は座標なし扱い)</color></size>";
+        }
+        if (_alignStatus.Length > 0)
+        {
+            extraLines += $"\n<size=30><color=#4CD9F0>{_alignStatus}</color></size>";
+        }
+        if (_feedbackText.Length > 0 && Time.time < _feedbackUntil)
+        {
+            // 音声/操作の結果フィードバック (3秒で消える)
+            extraLines += $"\n<size=34><color=#FFFFFF>{_feedbackText}</color></size>";
+        }
+
         string hud = _motionStereo != null ? _motionStereo.Hud : "";
         string result = _motionStereo != null ? _motionStereo.ResultText : "";
         _statusText.text =
             detectLine + "\n" +
             "<size=30>① 5〜6m歩く ② 木を見て静止 ③ 横に30cm→静止</size>\n" +
-            $"<size=34>{hud}\n{result}\n計測 {_measureCount}回 / 点群 {_cloudPoints.Count}点</size>".TrimEnd();
+            $"<size=34>{hud}\n{result}\n計測 {_measureCount}回 / 点群 {_cloudPoints.Count}点</size>".TrimEnd() +
+            extraLines;
+    }
+
+    /// <summary>保存済みマップのうち選木されている本数</summary>
+    int CountSavedSelected()
+    {
+        if (_savedTrees == null) return 0;
+        int n = 0;
+        foreach (var t in _savedTrees)
+        {
+            if (t.Selected) n++;
+        }
+        return n;
+    }
+
+    /// <summary>操作結果の1行フィードバックをHUDに出す (3秒で自動で消える)</summary>
+    void ShowFeedback(string message)
+    {
+        _feedbackText = message;
+        _feedbackUntil = Time.time + 3f;
     }
 
     /// <summary>テキストをカメラの方へ向ける (TextMeshは+Zが背面なので「カメラから遠ざかる向き」を向かせる)</summary>
@@ -255,10 +363,13 @@ public class ArDemoController : MonoBehaviour
         var trees = TreeDetectorMS.Detect(
             _cloudPoints, kf.CamPosition.y, kf.CamPosition, out _, out _);
         _treeCount = trees.Count;
+        _latestTrees = trees;                 // 視線選木の対象として保持する
+        _latestMeasureCamPos = kf.CamPosition;
 
         if (trees.Count > 0)
         {
             RebuildTreeMarkers(trees, kf.CamPosition);
+            TryAlignSavedMap(trees); // 保存済みマップと幹配置を照合し、復元マーカーを精密位置へ置き直す
         }
         else
         {
@@ -282,11 +393,15 @@ public class ArDemoController : MonoBehaviour
         {
             if (tree.IsTooClose) _tooCloseCount++;
             float dist = tree.HorizontalDistanceFrom(measureCamPos);
-            // 近すぎるペア (1m未満) は過密=間伐候補としてオレンジ表示。それ以外は緑
-            var color = tree.IsTooClose ? new Color(1f, 0.55f, 0.1f) : new Color(0.3f, 1f, 0.5f);
-            // ラベルは「距離m + 太さcm」の2行 (太さの推定が小さすぎる=根拠不足のときは距離だけ)
+            // 色の優先順位: 選木=赤 > 近すぎるペア (過密=間伐候補) のオレンジ > 通常の緑
+            bool selected = FindSelectedIndexNear(tree.TrunkBase) >= 0;
+            var color = selected ? SelectedColor
+                : tree.IsTooClose ? new Color(1f, 0.55f, 0.1f)
+                : new Color(0.3f, 1f, 0.5f);
+            // ラベルは2行: 距離 + 太さ (幅の推定が小さすぎる=根拠不足のときは距離だけ)
             string label = $"{dist:F1}m";
             if (tree.WidthMeters > 0.02f) label += $"\n太さ{Mathf.RoundToInt(tree.WidthMeters * 100f)}cm";
+            if (selected) label = "伐 " + label;
             // 足元の高さは木ごとの局所地面 (斜面対応)
             PlaceMarker(tree.TrunkBase, label, color);
         }
@@ -304,7 +419,14 @@ public class ArDemoController : MonoBehaviour
     /// <summary>木マーカー: 足元の輪 + ラベル (ラベルの向きはUpdateで毎フレームカメラへ向ける)</summary>
     void PlaceMarker(Vector3 groundPos, string text, Color color)
     {
-        var root = new GameObject($"TreeMarker_{_markers.Count}");
+        var marker = CreateMarker(groundPos, text, color);
+        _markers.Add(marker);
+    }
+
+    /// <summary>マーカーの実体を作る (検出マーカーと復元マーカーで共用)</summary>
+    (GameObject root, TextMesh label) CreateMarker(Vector3 groundPos, string text, Color color)
+    {
+        var root = new GameObject($"TreeMarker_{_markers.Count + _restoredMarkers.Count}");
         root.transform.SetParent(_workRoot.transform);
         root.transform.position = groundPos;
 
@@ -328,7 +450,296 @@ public class ArDemoController : MonoBehaviour
         label.color = color;
         label.text = text;
 
-        _markers.Add((root, label));
+        return (root, label);
+    }
+
+    // ---- 選木 (視線トグル) ----
+
+    /// <summary>視線の先の木を選木する (0.6m以内に選木済みがあれば解除のトグル)。戻り値=操作できたか</summary>
+    public static bool MarkTreeAtGaze()
+    {
+        if (_instance == null || _instance._workRoot == null) return false;
+        return _instance.ToggleAtGaze(unmarkOnly: false);
+    }
+
+    /// <summary>視線の先の木の選木を解除する。戻り値=操作できたか</summary>
+    public static bool UnmarkTreeAtGaze()
+    {
+        if (_instance == null || _instance._workRoot == null) return false;
+        return _instance.ToggleAtGaze(unmarkOnly: true);
+    }
+
+    /// <summary>
+    /// 視線の先の木を選木/解除する。対象は直近の検出リストのうち
+    /// 「幹 (足元+1m) への方向とカメラforwardの角度が最小かつ12°以内、水平10m以内」の木。
+    /// 今回の選木だけでなく、前回から復元した選木 (水色) もここで解除できる。
+    /// </summary>
+    bool ToggleAtGaze(bool unmarkOnly)
+    {
+        var tree = FindGazeTree();
+        if (tree == null)
+        {
+            ShowFeedback("視線の先に木がありません");
+            return false;
+        }
+
+        int idx = FindSelectedIndexNear(tree.TrunkBase);
+        int restoredIdx = FindRestoredSelectedNear(tree.TrunkBase);
+        if (idx >= 0)
+        {
+            _selected.RemoveAt(idx);
+            ShowFeedback("マークを外しました");
+        }
+        else if (restoredIdx >= 0)
+        {
+            _savedTrees[restoredIdx].Selected = false;
+            RebuildRestoredMarkers();
+            ShowFeedback("前回のマークを外しました");
+        }
+        else if (unmarkOnly)
+        {
+            ShowFeedback("この木はマークされていません");
+            return false;
+        }
+        else
+        {
+            _selected.Add(new SelectedTree
+            {
+                SessionPos = tree.TrunkBase,
+                WidthCm = Mathf.RoundToInt(tree.WidthMeters * 100f),
+            });
+            ShowFeedback("マークしました");
+        }
+
+        // マーカーの色/ラベルを反映し、基準点セット済みなら保存する
+        if (_latestTrees.Count > 0) RebuildTreeMarkers(_latestTrees, _latestMeasureCamPos);
+        SaveTreeMap();
+        return true;
+    }
+
+    /// <summary>視線の先の木を返す (角度最小かつ12°以内、水平10m以内)。該当なしはnull</summary>
+    MsTree FindGazeTree()
+    {
+        if (_arCamera == null) return null;
+        var camPos = _arCamera.transform.position;
+        var forward = _arCamera.transform.forward;
+        MsTree best = null;
+        float bestAngle = 12f; // これ以内でないと対象にしない
+        foreach (var tree in _latestTrees)
+        {
+            if (tree.HorizontalDistanceFrom(camPos) > 10f) continue;
+            // 狙い先は幹の見た目の中心あたり (足元+1m)
+            var toTree = tree.TrunkBase + Vector3.up * 1f - camPos;
+            float angle = Vector3.Angle(forward, toTree);
+            if (angle <= bestAngle)
+            {
+                bestAngle = angle;
+                best = tree;
+            }
+        }
+        return best;
+    }
+
+    /// <summary>この位置の近く (水平0.6m以内) の選木を探す。無ければ-1</summary>
+    int FindSelectedIndexNear(Vector3 sessionPos)
+    {
+        for (int i = 0; i < _selected.Count; i++)
+        {
+            var d = _selected[i].SessionPos - sessionPos;
+            d.y = 0f;
+            if (d.sqrMagnitude <= SameTreeRadius * SameTreeRadius) return i;
+        }
+        return -1;
+    }
+
+    /// <summary>この位置の近くにある「前回から復元した選木」を保存済みマップから探す。無ければ-1</summary>
+    int FindRestoredSelectedNear(Vector3 sessionPos)
+    {
+        if (!_anchorSet || _savedTrees == null) return -1;
+        for (int i = 0; i < _savedTrees.Count; i++)
+        {
+            if (!_savedTrees[i].Selected) continue;
+            var d = _mapToSession.Apply(_savedTrees[i].MapPos) - sessionPos;
+            d.y = 0f;
+            if (d.sqrMagnitude <= SameTreeRadius * SameTreeRadius) return i;
+        }
+        return -1;
+    }
+
+    // ---- 基準点とマップ座標系 ----
+
+    /// <summary>
+    /// 現在のカメラ位置とyawをセッションの基準点にする。
+    /// 保存済みマップがあれば前回の選木を復元表示する。戻り値=セットできたか
+    /// </summary>
+    public static bool SetAnchorHere()
+    {
+        if (_instance == null || _instance._workRoot == null || _instance._arCamera == null) return false;
+        return _instance.SetAnchor();
+    }
+
+    bool SetAnchor()
+    {
+        var cam = _arCamera.transform;
+        var forward = cam.forward;
+        forward.y = 0f; // yawだけ使う (上下の傾きは基準にしない)
+        if (forward.sqrMagnitude < 1e-6f)
+        {
+            ShowFeedback("真上/真下を向いたままでは基準点にできません");
+            return false;
+        }
+
+        _anchorPos = cam.position;
+        _anchorYawRad = Mathf.Atan2(forward.x, forward.z);
+        _anchorSet = true;
+        _mapToSession = AnchorTransform(); // 照合が成功するまでは基準点由来の変換で表示する
+
+        // 撮影セッションにも基準点を残す (サーバー側の3Dマップ化が、このセッションの
+        // 座標系→計画のマップ座標系の変換に使う。無いセッションはサーバー処理の対象外になる)
+        PlanCaptureService.Active?.WriteAnchor(_anchorPos, _anchorYawRad);
+
+        int restored = RebuildRestoredMarkers();
+        ShowFeedback(restored > 0 ? $"基準点OK / 前回の選木{restored}本を復元" : "基準点をセットしました");
+        return true;
+    }
+
+    /// <summary>基準点由来のマップ→セッション変換 (回転はyawのみ)</summary>
+    MsMapTransform AnchorTransform() => new MsMapTransform
+    {
+        Theta = -_anchorYawRad,
+        Tx = _anchorPos.x,
+        Tz = _anchorPos.z,
+        Ty = _anchorPos.y,
+    };
+
+    /// <summary>セッション座標→マップ座標 (基準点を原点、基準方向を+Z、yは基準点からの相対)</summary>
+    Vector3 SessionToMap(Vector3 sessionPos)
+    {
+        var r = sessionPos - _anchorPos;
+        float c = Mathf.Cos(_anchorYawRad), s = Mathf.Sin(_anchorYawRad);
+        return new Vector3(c * r.x - s * r.z, r.y, s * r.x + c * r.z);
+    }
+
+    // ---- 保存と再訪復元 ----
+
+    /// <summary>
+    /// 検出済みの全木 (選木フラグ付き) をマップ座標に変換して保存する。
+    /// 基準点がないとマップ座標に変換できないため、基準点セット済み+計画IDありのときだけ保存する。
+    /// 前回の選木で今回まだ検出できていないものも、消えないよう保存に引き継ぐ。
+    /// </summary>
+    void SaveTreeMap()
+    {
+        if (!_anchorSet || string.IsNullOrEmpty(CurrentPlanId)) return;
+        // 何も検出・選木していないのに上書きして前回のマップを消さない
+        if (_latestTrees.Count == 0 && _selected.Count == 0) return;
+
+        var entries = new List<PlanTreeStore.PlanTree>();
+        var savedSelected = new bool[_selected.Count];
+        foreach (var tree in _latestTrees)
+        {
+            int idx = FindSelectedIndexNear(tree.TrunkBase);
+            if (idx >= 0) savedSelected[idx] = true;
+            entries.Add(new PlanTreeStore.PlanTree
+            {
+                MapPos = SessionToMap(tree.TrunkBase),
+                WidthCm = Mathf.RoundToInt(tree.WidthMeters * 100f),
+                Selected = idx >= 0,
+            });
+        }
+
+        // 検出リストの入れ替わりで消えた選木も落とさない
+        for (int i = 0; i < _selected.Count; i++)
+        {
+            if (savedSelected[i]) continue;
+            entries.Add(new PlanTreeStore.PlanTree
+            {
+                MapPos = SessionToMap(_selected[i].SessionPos),
+                WidthCm = _selected[i].WidthCm,
+                Selected = true,
+            });
+        }
+
+        // 前回の選木は上書き保存で消えないよう引き継ぐ (今回の座標系に変換して重複は統合)
+        if (_savedTrees != null)
+        {
+            foreach (var old in _savedTrees)
+            {
+                if (!old.Selected) continue;
+                var mapPos = SessionToMap(_mapToSession.Apply(old.MapPos));
+                var near = FindEntryNear(entries, mapPos);
+                if (near != null)
+                {
+                    near.Selected = true; // 今回も検出できた木: 選木フラグだけ引き継ぐ
+                }
+                else
+                {
+                    entries.Add(new PlanTreeStore.PlanTree
+                    {
+                        MapPos = mapPos,
+                        WidthCm = old.WidthCm,
+                        Selected = true,
+                    });
+                }
+            }
+        }
+
+        PlanTreeStore.Save(CurrentPlanId, entries);
+    }
+
+    /// <summary>保存候補の中から水平0.6m以内のものを探す (前回分との重複統合用)</summary>
+    static PlanTreeStore.PlanTree FindEntryNear(List<PlanTreeStore.PlanTree> entries, Vector3 mapPos)
+    {
+        foreach (var e in entries)
+        {
+            float dx = e.MapPos.x - mapPos.x, dz = e.MapPos.z - mapPos.z;
+            if (dx * dx + dz * dz <= SameTreeRadius * SameTreeRadius) return e;
+        }
+        return null;
+    }
+
+    /// <summary>前回の選木の復元マーカーを作り直す。戻り値=表示した本数</summary>
+    int RebuildRestoredMarkers()
+    {
+        foreach (var marker in _restoredMarkers)
+        {
+            if (marker.root != null) Destroy(marker.root);
+        }
+        _restoredMarkers.Clear();
+        if (!_anchorSet || _savedTrees == null || _workRoot == null) return 0;
+
+        foreach (var tree in _savedTrees)
+        {
+            if (!tree.Selected) continue;
+            var marker = CreateMarker(_mapToSession.Apply(tree.MapPos), "伐(前回)", RestoredColor);
+            _restoredMarkers.Add((marker.root, marker.label, tree.MapPos));
+        }
+        return _restoredMarkers.Count;
+    }
+
+    /// <summary>
+    /// 保存済みマップの幹配置と今回の検出を照合し、成功したら復元マーカーを精密位置へ置き直す。
+    /// 双方3本以上のときだけ試す (点数が少なく数十本規模なのでメインスレッドで足りる)。
+    /// </summary>
+    void TryAlignSavedMap(List<MsTree> trees)
+    {
+        if (!_anchorSet || _savedTrees == null || _savedTrees.Count < 3 || trees.Count < 3) return;
+
+        var oldXZ = new List<Vector2>(_savedTrees.Count);
+        foreach (var t in _savedTrees) oldXZ.Add(new Vector2(t.MapPos.x, t.MapPos.z));
+        var newXZ = new List<Vector2>(trees.Count);
+        foreach (var t in trees) newXZ.Add(new Vector2(t.X, t.Z));
+
+        var result = TreeMapAligner.Align(oldXZ, newXZ, coarseInit: AnchorTransform());
+        if (!result.Success) return; // 失敗時は基準点由来の変換のまま
+
+        var transform2d = result.Transform;
+        transform2d.Ty = _anchorPos.y; // Alignは水平のみ推定するので高さは基準点の相対のまま
+        _mapToSession = transform2d;
+        foreach (var marker in _restoredMarkers)
+        {
+            if (marker.root != null) marker.root.transform.position = _mapToSession.Apply(marker.mapPos);
+        }
+        _alignStatus = $"照合OK: {result.InlierCount}本一致 (誤差{result.RmsMeters:F2}m)";
     }
 
     // ---- リグ (初回だけ作り、以後維持) ----

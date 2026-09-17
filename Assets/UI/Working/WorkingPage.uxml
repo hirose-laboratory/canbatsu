@@ -27,6 +27,12 @@
 
             <ui:Label text="アプリを閉じずにこのままお使いください" class="working__note" />
 
+            <!-- ARグラス操作の代替ボタン (音声「きじゅん」「マーク」が使えないときの手元操作) -->
+            <ui:VisualElement class="working__ar-actions">
+                <ui:Button name="anchor-button" text="基準点" class="working__ar-action" />
+                <ui:Button name="mark-button" text="マーク" class="working__ar-action working__ar-action--mark" />
+            </ui:VisualElement>
+
             <ui:Button name="finish-button" text="作業を終了する" class="working__finish-button" />
 
         </ui:VisualElement>
