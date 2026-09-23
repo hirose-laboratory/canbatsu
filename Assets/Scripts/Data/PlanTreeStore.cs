@@ -25,8 +25,24 @@ public static class PlanTreeStore
         public bool Selected;    // 選木 (伐採対象マーク) されているか
     }
 
-    /// <summary>この計画の木マップを丸ごと上書き保存する (awaitしない)</summary>
-    public static void Save(string planId, IReadOnlyList<PlanTree> entries)
+    /// <summary>基準点の地理情報 (基準点セット時のGPSとコンパス)。選木結果を地図に載せる位置合わせに使う</summary>
+    public class AnchorGeo
+    {
+        public double Lat;
+        public double Lon;
+        public float HeadingDeg;  // マップ座標+Z方向の真北からの方位 [度・時計回り]
+        public bool HasHeading;   // コンパスが取れていたか (falseなら地図表示には使えない)
+    }
+
+    /// <summary>読み込み結果 (木リスト + 基準点の地理情報)</summary>
+    public class PlanTreeMap
+    {
+        public List<PlanTree> Trees = new List<PlanTree>();
+        public AnchorGeo Geo; // 無ければnull
+    }
+
+    /// <summary>この計画の木マップを丸ごと上書き保存する (awaitしない)。anchorGeoは取れたときだけ渡す</summary>
+    public static void Save(string planId, IReadOnlyList<PlanTree> entries, AnchorGeo geo = null)
     {
         if (string.IsNullOrEmpty(planId) || entries == null) return;
         if (FirebaseService.Db == null)
@@ -52,38 +68,71 @@ public static class PlanTreeStore
             { "trees", trees },
             { "updatedAt", FieldValue.ServerTimestamp },
         };
+        if (geo != null)
+        {
+            data["anchorGeo"] = new Dictionary<string, object>
+            {
+                { "lat", geo.Lat },
+                { "lon", geo.Lon },
+                { "headingDeg", (double)geo.HeadingDeg },
+                { "hasHeading", geo.HasHeading },
+            };
+        }
+        // MergeAll: GPSが取れなかった回の保存で、以前のanchorGeoを消さないため (treesは配列ごと置き換わる)
         FirebaseService.Db.Collection(PlanCollection).Document(planId)
             .Collection(MapCollection).Document(MapDocument)
-            .SetAsync(data); // 圏外対策: awaitしない
+            .SetAsync(data, SetOptions.MergeAll); // 圏外対策: awaitしない
     }
 
-    /// <summary>この計画の木マップを読み込む。未保存・失敗時は空リスト</summary>
-    public static async Task<List<PlanTree>> LoadAsync(string planId)
+    /// <summary>この計画の木マップを読み込む。未保存・失敗時は空 (Trees空リスト・Geo=null)</summary>
+    public static async Task<PlanTreeMap> LoadAsync(string planId)
     {
-        var list = new List<PlanTree>();
-        if (string.IsNullOrEmpty(planId) || FirebaseService.Db == null) return list;
+        var result = new PlanTreeMap();
+        if (string.IsNullOrEmpty(planId) || FirebaseService.Db == null) return result;
         try
         {
             var snap = await FirebaseService.Db.Collection(PlanCollection).Document(planId)
                 .Collection(MapCollection).Document(MapDocument).GetSnapshotAsync();
-            if (!snap.Exists) return list;
-            if (!snap.TryGetValue("trees", out List<object> raw)) return list;
-            foreach (var item in raw)
+            if (!snap.Exists) return result;
+            if (snap.TryGetValue("trees", out List<object> raw))
             {
-                if (!(item is Dictionary<string, object> d)) continue;
-                list.Add(new PlanTree
+                foreach (var item in raw)
                 {
-                    MapPos = new Vector3(ToFloat(d, "x"), ToFloat(d, "y"), ToFloat(d, "z")),
-                    WidthCm = (int)Math.Round(ToFloat(d, "widthCm")),
-                    Selected = d.TryGetValue("selected", out var s) && s is bool b && b,
-                });
+                    if (!(item is Dictionary<string, object> d)) continue;
+                    result.Trees.Add(new PlanTree
+                    {
+                        MapPos = new Vector3(ToFloat(d, "x"), ToFloat(d, "y"), ToFloat(d, "z")),
+                        WidthCm = (int)Math.Round(ToFloat(d, "widthCm")),
+                        Selected = d.TryGetValue("selected", out var s) && s is bool b && b,
+                    });
+                }
+            }
+            if (snap.TryGetValue("anchorGeo", out Dictionary<string, object> g))
+            {
+                result.Geo = new AnchorGeo
+                {
+                    Lat = ToDouble(g, "lat"),
+                    Lon = ToDouble(g, "lon"),
+                    HeadingDeg = ToFloat(g, "headingDeg"),
+                    HasHeading = g.TryGetValue("hasHeading", out var hh) && hh is bool hb && hb,
+                };
             }
         }
         catch (Exception e)
         {
             Debug.LogError($"木マップの読み込みに失敗しました: {e.Message}");
         }
-        return list;
+        return result;
+    }
+
+    static double ToDouble(Dictionary<string, object> d, string key)
+    {
+        if (d.TryGetValue(key, out var v))
+        {
+            if (v is double dv) return dv;
+            if (v is long lv) return lv;
+        }
+        return 0;
     }
 
     /// <summary>Firestoreの数値はlong/doubleで返るので両方受ける</summary>

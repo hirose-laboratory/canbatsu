@@ -134,6 +134,9 @@ public class AppRouter : MonoBehaviour
             if (ContainsAny(text, "マーク", "まーく")) ArDemoController.MarkTreeAtGaze();
             else if (ContainsAny(text, "とりけし", "取り消し")) ArDemoController.UnmarkTreeAtGaze();
             else if (ContainsAny(text, "きじゅん", "基準")) ArDemoController.SetAnchorHere();
+            // かかり木モード: 視界中央の木に危険域を出す。「かいじょ」で消す
+            else if (ContainsAny(text, "かかり", "掛かり", "カカリ")) ArDemoController.StartKakarigiAtGaze();
+            else if (ContainsAny(text, "かいじょ", "解除", "カイジョ")) ArDemoController.ClearKakarigi();
             return;
         }
 

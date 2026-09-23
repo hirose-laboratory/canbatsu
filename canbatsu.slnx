@@ -2,6 +2,7 @@
   <Project Path="Assembly-CSharp.csproj" />
   <Project Path="Firebase.App.Internal.csproj" />
   <Project Path="Unity.XR.XREAL.csproj" />
+  <Project Path="HangUpTree.Core.csproj" />
   <Project Path="Unity.XR.XREAL.Editor.csproj" />
   <Project Path="CanbatsuMS.csproj" />
 </Solution>

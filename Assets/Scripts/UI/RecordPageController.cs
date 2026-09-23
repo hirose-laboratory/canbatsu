@@ -33,6 +33,7 @@ public class RecordPageController
     readonly VisualElement _deleteDialog;
 
     WorkRecord _selectedRecord; // 詳細ポップアップで表示中の作業記録 (削除対象)
+    string _shownTreesPlanId;   // 選木マーカーを表示中の計画 (非同期読込の取り違え防止)
 
     // 現在地への自動センタリング (最初のFixが来るまで、ユーザーが地図を触るまで)
     bool _userMovedMap;
@@ -195,6 +196,8 @@ public class RecordPageController
                     ("対象面積", $"{plan.AreaHa:0.0#}ha"),
                     ("記録", recordCount > 0 ? $"{recordCount}回" : "まだ"),
                 });
+            // 選木結果 (ARで選んだ木) があれば赤い点で地図に載せる (紙地図でいう1/2500の確認用途)
+            _ = ShowSelectedTreesAsync(plan.Id);
         }
         else if (polygon.UserData is WorkRecord record)
         {
@@ -248,7 +251,51 @@ public class RecordPageController
         _infoCard.style.display = DisplayStyle.None;
         _layerButton.style.display = DisplayStyle.Flex;
         _selectedRecord = null;
+        _shownTreesPlanId = null;
+        _map.ClearPointMarkers();
         _map.ClearDisplaySelection();
+    }
+
+    /// <summary>
+    /// 計画の選木結果 (armap) を読み、基準点のGPS+方位で緯度経度に変換して赤い点で表示する。
+    /// 基準点の地理情報が無い計画 (GPS圏外・古いデータ) では何も出さない。
+    /// 精度の目安: GPS±10m+コンパス±10〜30°なので「どのあたりを選んだか」の確認用
+    /// (1本単位の正確な位置はARの再訪復元側が担当)。
+    /// </summary>
+    async Task ShowSelectedTreesAsync(string planId)
+    {
+        _shownTreesPlanId = planId;
+        _map.ClearPointMarkers();
+
+        PlanTreeStore.PlanTreeMap treeMap;
+        try
+        {
+            treeMap = await PlanTreeStore.LoadAsync(planId);
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"選木マップの読み込みに失敗: {e.Message}");
+            return;
+        }
+        // 読み込み中に別の計画/閉じる操作をしていたら捨てる
+        if (_shownTreesPlanId != planId) return;
+        if (treeMap.Geo == null || !treeMap.Geo.HasHeading) return;
+
+        double latRad = treeMap.Geo.Lat * Math.PI / 180.0;
+        double theta = treeMap.Geo.HeadingDeg * Math.PI / 180.0; // マップ+Zの真北からの方位 (時計回り)
+        var markers = new List<(Vector2 lonLat, Color color)>();
+        var red = new Color(0.9f, 0.24f, 0.2f); // ARの選木マーカーと同じ赤
+        foreach (var tree in treeMap.Trees)
+        {
+            if (!tree.Selected) continue;
+            // マップ座標 (基準点原点・+Z=基準方向) → 北/東のメートルオフセット → 緯度経度
+            double north = tree.MapPos.z * Math.Cos(theta) - tree.MapPos.x * Math.Sin(theta);
+            double east = tree.MapPos.z * Math.Sin(theta) + tree.MapPos.x * Math.Cos(theta);
+            double lat = treeMap.Geo.Lat + north / 111320.0;
+            double lon = treeMap.Geo.Lon + east / (111320.0 * Math.Cos(latRad));
+            markers.Add((new Vector2((float)lon, (float)lat), red));
+        }
+        if (markers.Count > 0) _map.SetPointMarkers(markers);
     }
 
     // ---- 記録の削除 ----

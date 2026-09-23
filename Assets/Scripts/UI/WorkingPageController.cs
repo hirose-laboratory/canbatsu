@@ -85,9 +85,20 @@ public class WorkingPageController
         AddRow(summary, "しきい値 (伐採間隔)", $"{plan.FellingIntervalM:0.0}m");
         AddRow(summary, "対象面積", $"{plan.AreaHa:0.0#}ha");
 
-        // ARグラス操作の代替ボタン (音声「きじゅん」「マーク」が使えないときの手元操作。結果はグラスのHUDに出る)
+        // ARグラス操作の代替ボタン (音声「きじゅん」「マーク」「かかりぎ」が使えないときの手元操作。結果はグラスのHUDに出る)
         page.Q<Button>("anchor-button").clicked += () => ArDemoController.SetAnchorHere();
         page.Q<Button>("mark-button").clicked += () => ArDemoController.MarkTreeAtGaze();
+        // かかり木はトグル (表示中に押すと解除)。表示状態に合わせて文言も切り替える
+        var kakarigiButton = page.Q<Button>("kakarigi-button");
+        kakarigiButton.clicked += () =>
+        {
+            if (ArDemoController.KakarigiActive) ArDemoController.ClearKakarigi();
+            else ArDemoController.StartKakarigiAtGaze();
+        };
+        page.schedule.Execute(() =>
+        {
+            kakarigiButton.text = ArDemoController.KakarigiActive ? "かかり木解除" : "かかり木";
+        }).Every(500);
 
         // 誤タップ防止のためダイアログを挟む (記録して続ける / 記録して完了 / キャンセルの3択)
         page.Q<Button>("finish-button").clicked += ShowFinishDialog;

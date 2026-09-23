@@ -50,6 +50,10 @@ public class ArDemoController : MonoBehaviour
     bool _anchorSet;
     Vector3 _anchorPos;
     float _anchorYawRad;
+    PlanTreeStore.AnchorGeo _anchorGeo; // 基準点セット時のGPS+方位 (取れなかったらnull)
+
+    // かかり木の危険域表示 (試作。音声「かかりぎ」/ボタンで視界中央の木に対して起動)
+    readonly KakarigiDisplay _kakarigi = new KakarigiDisplay();
     MsMapTransform _mapToSession; // マップ→セッション変換 (幹マップ照合が成功すると精密版に置き換わる)
 
     List<PlanTreeStore.PlanTree> _savedTrees; // この計画の保存済みマップ (読み込み完了までnull)
@@ -165,8 +169,10 @@ public class ArDemoController : MonoBehaviour
         _selected.Clear();
         _latestTrees.Clear();
         _restoredMarkers.Clear(); // 実体は_workRoot下なので破棄済み
+        _kakarigi.Clear();        // 実体は_workRoot下だが内部状態 (Zone等) も戻す
         _savedTrees = null;
         _anchorSet = false;
+        _anchorGeo = null;
         _alignStatus = "";
         _feedbackText = "";
     }
@@ -174,10 +180,10 @@ public class ArDemoController : MonoBehaviour
     /// <summary>保存済みマップを裏で読み込む (BeginWorkから。完了時に作業が続いていれば反映する)</summary>
     async void LoadSavedMapAsync(string planId)
     {
-        var trees = await PlanTreeStore.LoadAsync(planId);
+        var map = await PlanTreeStore.LoadAsync(planId);
         // 読み込み中に作業が終わった/別の計画に変わっていたら捨てる
         if (_workRoot == null || planId != CurrentPlanId) return;
-        _savedTrees = trees;
+        _savedTrees = map.Trees;
         // 基準点が先にセットされていたら、この時点で復元マーカーを出す
         if (_anchorSet)
         {
@@ -242,6 +248,7 @@ public class ArDemoController : MonoBehaviour
             {
                 if (marker.label != null) BillboardToCamera(marker.label.transform);
             }
+            if (_kakarigi.LabelTransform != null) BillboardToCamera(_kakarigi.LabelTransform);
         }
 
         if (_statusText == null) return;
@@ -277,6 +284,23 @@ public class ArDemoController : MonoBehaviour
         if (_alignStatus.Length > 0)
         {
             extraLines += $"\n<size=30><color=#4CD9F0>{_alignStatus}</color></size>";
+        }
+        if (_kakarigi.Active)
+        {
+            extraLines += $"\n<size=30><color=#FF8C40>かかり木: {_kakarigi.Summary}</color></size>";
+            // 危険域の中にいるあいだは点滅の強い警告を出す
+            if (_arCamera != null && _kakarigi.Contains(_arCamera.transform.position))
+            {
+                bool blink = (int)(Time.time * 3f) % 2 == 0;
+                string kindText = "危険域内";
+                if (_kakarigi.Zone.TryGetWorstKind(_arCamera.transform.position, out var kind))
+                {
+                    kindText = kind == HangUpTree.Core.DangerRegionKind.MainFall ? "主落下側の危険域内"
+                        : kind == HangUpTree.Core.DangerRegionKind.Kickback ? "跳ね返り側の危険域内"
+                        : "立入禁止円の中";
+                }
+                if (blink) extraLines += $"\n<size=56><color=#FF3020>⚠ {kindText}! 離れて</color></size>";
+            }
         }
         if (_feedbackText.Length > 0 && Time.time < _feedbackUntil)
         {
@@ -566,6 +590,98 @@ public class ArDemoController : MonoBehaviour
         return -1;
     }
 
+    // ---- かかり木モード (試作) ----
+
+    /// <summary>
+    /// 視界中央の木をかかり木として危険域を表示する (音声「かかりぎ」/作業ページのボタンから)。
+    /// 支持木はその最寄りの検出木を自動で使う。戻り値=起動できたか
+    /// </summary>
+    public static bool StartKakarigiAtGaze()
+    {
+        if (_instance == null || _instance._workRoot == null) return false;
+        return _instance.StartKakarigi();
+    }
+
+    /// <summary>かかり木の危険域表示を消す (音声「かいじょ」/ボタンのトグル)</summary>
+    public static void ClearKakarigi()
+    {
+        if (_instance == null) return;
+        _instance._kakarigi.Clear();
+        _instance.ShowFeedback("かかり木表示を解除しました");
+    }
+
+    /// <summary>かかり木モードが表示中か (作業ページのボタンのトグル判定用)</summary>
+    public static bool KakarigiActive => _instance != null && _instance._kakarigi.Active;
+
+    bool StartKakarigi()
+    {
+        var target = FindGazeTree();
+        if (target == null)
+        {
+            ShowFeedback(_latestTrees.Count == 0
+                ? "先に計測して木を検出してください"
+                : "視線の先に木がありません (対象を画面中央に)");
+            return false;
+        }
+
+        // 支持木 = かかり木の最寄りの検出木 (かかり木は必ず何かに掛かっているため)。6m以内に無ければ単独扱い
+        MsTree support = null;
+        float bestD = 6f * 6f;
+        foreach (var tree in _latestTrees)
+        {
+            if (tree == target) continue;
+            float dx = tree.X - target.X, dz = tree.Z - target.Z;
+            float d2 = dx * dx + dz * dz;
+            if (d2 > SameTreeRadius * SameTreeRadius && d2 < bestD)
+            {
+                bestD = d2;
+                support = tree;
+            }
+        }
+
+        _kakarigi.Show(_workRoot.transform, target, support,
+            _arCamera.transform.position, FitGroundPlane(target.TrunkBase));
+        ShowFeedback(support != null ? "かかり木の危険域を表示 (支持木: 最寄りの木)"
+                                     : "かかり木の危険域を表示");
+        return true;
+    }
+
+    /// <summary>
+    /// 指定位置の周辺の地面平面を計測点群から推定する (斜面なら傾いた平面になり、
+    /// 危険域が谷側へ伸びる計算に効く)。点が足りなければその木の足元の水平面。
+    /// 高さの当てはめ y=ax+bz+c を最小二乗で解く。
+    /// </summary>
+    Plane FitGroundPlane(Vector3 around)
+    {
+        var xs = new List<Vector3>();
+        foreach (var p in _cloudPoints)
+        {
+            float dx = p.x - around.x, dz = p.z - around.z;
+            // 周囲8m以内の低い点 (地面付近) だけ使う
+            if (dx * dx + dz * dz < 64f && p.y < around.y + 0.5f) xs.Add(p);
+        }
+        if (xs.Count < 12) return new Plane(Vector3.up, around);
+
+        // 正規方程式 (3x3) を組んで y = a*x + b*z + c を解く
+        double sxx = 0, sxz = 0, sx = 0, szz = 0, sz = 0, n = xs.Count;
+        double sxy = 0, szy = 0, sy = 0;
+        foreach (var p in xs)
+        {
+            sxx += p.x * (double)p.x; sxz += p.x * (double)p.z; sx += p.x;
+            szz += p.z * (double)p.z; sz += p.z;
+            sxy += p.x * (double)p.y; szy += p.z * (double)p.y; sy += p.y;
+        }
+        double det = sxx * (szz * n - sz * sz) - sxz * (sxz * n - sz * sx) + sx * (sxz * sz - szz * sx);
+        if (System.Math.Abs(det) < 1e-6) return new Plane(Vector3.up, around);
+        double a = (sxy * (szz * n - sz * sz) - sxz * (szy * n - sz * sy) + sx * (szy * sz - szz * sy)) / det;
+        double b = (sxx * (szy * n - sy * sz) - sxy * (sxz * n - sz * sx) + sx * (sxz * sy - szy * sx)) / det;
+
+        var normal = new Vector3(-(float)a, 1f, -(float)b).normalized;
+        // 平面推定の外れで危険域が立ち上がらないよう、傾きは35°までに制限する
+        if (Vector3.Angle(normal, Vector3.up) > 35f) return new Plane(Vector3.up, around);
+        return new Plane(normal, around);
+    }
+
     // ---- 基準点とマップ座標系 ----
 
     /// <summary>
@@ -597,6 +713,18 @@ public class ArDemoController : MonoBehaviour
         // 撮影セッションにも基準点を残す (サーバー側の3Dマップ化が、このセッションの
         // 座標系→計画のマップ座標系の変換に使う。無いセッションはサーバー処理の対象外になる)
         PlanCaptureService.Active?.WriteAnchor(_anchorPos, _anchorYawRad);
+
+        // 基準点の地理情報 (GPS+方位)。選木結果を2Dの地図に載せる位置合わせに使う (取れたときだけ)
+        if (LocationProvider.HasFix)
+        {
+            _anchorGeo = new PlanTreeStore.AnchorGeo
+            {
+                Lat = LocationProvider.Latitude,
+                Lon = LocationProvider.Longitude,
+                HeadingDeg = LocationProvider.HeadingDeg,
+                HasHeading = LocationProvider.HasHeading,
+            };
+        }
 
         int restored = RebuildRestoredMarkers();
         ShowFeedback(restored > 0 ? $"基準点OK / 前回の選木{restored}本を復元" : "基準点をセットしました");
@@ -683,7 +811,7 @@ public class ArDemoController : MonoBehaviour
             }
         }
 
-        PlanTreeStore.Save(CurrentPlanId, entries);
+        PlanTreeStore.Save(CurrentPlanId, entries, _anchorGeo);
     }
 
     /// <summary>保存候補の中から水平0.6m以内のものを探す (前回分との重複統合用)</summary>
@@ -796,7 +924,7 @@ public class ArDemoController : MonoBehaviour
     /// 実機ビルドでは参照されていないシェーダーは削られて Shader.Find が null を返すため、
     /// Resources/AR/ArUnlit.mat (URP Unlitを参照するマテリアル) を元にコピーして色だけ変える。
     /// </summary>
-    static Material MakeUnlit(Color color)
+    public static Material MakeUnlit(Color color)
     {
         var baseMat = Resources.Load<Material>("AR/ArUnlit");
         Material mat;

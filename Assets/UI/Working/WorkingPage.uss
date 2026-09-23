@@ -153,6 +153,16 @@
     background-color: rgb(253, 243, 242);
 }
 
+/* かかり木 = 危険表示なのでオレンジ系。表示中はもう一度押すと解除 (Controllerが文言を切り替える) */
+.working__ar-action--kakarigi {
+    border-color: rgb(230, 140, 40);
+    color: rgb(210, 120, 20);
+}
+
+.working__ar-action--kakarigi:hover {
+    background-color: rgb(255, 247, 238);
+}
+
 .working__finish-button {
     align-self: stretch;
     height: 48px;

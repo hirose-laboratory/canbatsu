@@ -18,6 +18,12 @@ public class LocationProvider : MonoBehaviour
     public static double Latitude { get; private set; }
     public static double Longitude { get; private set; }
 
+    /// <summary>方位が取れているか (コンパスのセンサー値が届いているか)。エディタではfalseのまま</summary>
+    public static bool HasHeading { get; private set; }
+
+    /// <summary>真北からの方位 [度・時計回り]。選木マップの向き合わせに使う (森の中では±10〜30°程度ぶれる)</summary>
+    public static float HeadingDeg { get; private set; }
+
     bool _wantUpdates;    // StartUpdatesが呼ばれたか (権限待ちの間もUpdateで開始を試し続ける)
     bool _serviceStarted; // Input.location.Start を呼んだか
 
@@ -45,6 +51,8 @@ public class LocationProvider : MonoBehaviour
 
         // 精度10m・10m移動ごとに更新 (山中の作業用途には十分で電池消費を抑えられる)
         Input.location.Start(10f, 10f);
+        // コンパスも起動 (基準点の向きを真北基準で記録し、選木結果を地図に載せるのに使う)
+        Input.compass.enabled = true;
         _serviceStarted = true;
     }
 
@@ -69,6 +77,13 @@ public class LocationProvider : MonoBehaviour
             Latitude = data.latitude;
             Longitude = data.longitude;
             HasFix = true;
+
+            // コンパス (timestampが入っていればセンサー値が届いている)
+            if (Input.compass.enabled && Input.compass.timestamp > 0)
+            {
+                HeadingDeg = Input.compass.trueHeading;
+                HasHeading = true;
+            }
         }
         else if (status == LocationServiceStatus.Failed)
         {

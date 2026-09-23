@@ -39,7 +39,9 @@ public class MapView : VisualElement
 
     const int TileSize = 256;
     const int MinZoom = 5;
-    const int MaxZoom = 17;
+    // 最大ズームは18 (選木結果の確認は紙地図でいう1/2500相当まで寄りたい、という現場の要望。
+    // 国土地理院タイルは標準地図/航空写真ともz18まで配信されている)
+    const int MaxZoom = 18;
 
     // 小班の下敷きポリゴンを描く最小ズーム (これ未満は細かすぎて潰れるので描画もヒットもしない)
     const int MinForestZoom = 13;
@@ -76,6 +78,14 @@ public class MapView : VisualElement
 
     // 小班の下敷きポリゴン (森林簿の境界表示。表示専用ポリゴンよりさらに下に淡く描く)
     readonly List<DisplayPolygon> _forestPolygons = new List<DisplayPolygon>();
+
+    // 点マーカー (選木結果の地図表示用。x=経度, y=緯度)
+    readonly List<(Vector2 lonLat, Color color)> _pointMarkers = new List<(Vector2, Color)>();
+
+    // スケールバー (紙地図の縮尺感覚に応える。左下に「━━ 100 m」)
+    VisualElement _scaleLine;
+    Label _scaleLabel;
+    static readonly float[] ScaleSteps = { 10f, 20f, 50f, 100f, 200f, 500f, 1000f, 2000f, 5000f };
 
     /// <summary>表示専用ポリゴンがタップされたとき (何もない場所ならnull)。ポップアップ表示などに使う。
     /// 表示専用ポリゴンが無い場所では下敷きの小班ポリゴンも判定し、UserDataの型で受け側が区別する</summary>
@@ -172,6 +182,8 @@ public class MapView : VisualElement
         RegisterCallback<PointerUpEvent>(OnPointerUp);
         RegisterCallback<PointerCancelEvent>(evt => RemovePointer(evt.pointerId));
         RegisterCallback<WheelEvent>(OnWheel);
+
+        BuildScaleBar();
 
         // 現在地の青ドットを追従させる (地図は操作時しか再描画しないので、位置が変わる分は定期的に描き直す)
         schedule.Execute(() =>
@@ -837,11 +849,74 @@ public class MapView : VisualElement
         _tiles.Clear();
     }
 
+    /// <summary>点マーカーを差し替える (選木結果の表示用。x=経度, y=緯度)</summary>
+    public void SetPointMarkers(List<(Vector2 lonLat, Color color)> markers)
+    {
+        _pointMarkers.Clear();
+        if (markers != null) _pointMarkers.AddRange(markers);
+        _overlay.MarkDirtyRepaint();
+    }
+
+    public void ClearPointMarkers() => SetPointMarkers(null);
+
+    // ---- スケールバー (左下。紙地図で縮尺を見て使う現場の感覚に合わせる) ----
+
+    void BuildScaleBar()
+    {
+        var box = new VisualElement { pickingMode = PickingMode.Ignore };
+        box.style.position = Position.Absolute;
+        box.style.left = 8;
+        box.style.bottom = 6;
+        box.style.backgroundColor = new Color(1f, 1f, 1f, 0.75f);
+        box.style.borderTopLeftRadius = 6;
+        box.style.borderTopRightRadius = 6;
+        box.style.borderBottomLeftRadius = 6;
+        box.style.borderBottomRightRadius = 6;
+        box.style.paddingLeft = 6;
+        box.style.paddingRight = 6;
+        box.style.paddingTop = 2;
+        box.style.paddingBottom = 4;
+        Add(box);
+
+        _scaleLabel = new Label("100 m") { pickingMode = PickingMode.Ignore };
+        _scaleLabel.style.fontSize = 10;
+        _scaleLabel.style.color = new Color(0.2f, 0.2f, 0.2f);
+        _scaleLabel.style.unityTextAlign = TextAnchor.MiddleCenter;
+        _scaleLabel.style.marginBottom = 1;
+        box.Add(_scaleLabel);
+
+        _scaleLine = new VisualElement { pickingMode = PickingMode.Ignore };
+        _scaleLine.style.height = 3;
+        _scaleLine.style.width = 60;
+        _scaleLine.style.backgroundColor = new Color(0.2f, 0.2f, 0.2f);
+        box.Add(_scaleLine);
+    }
+
+    /// <summary>ズーム/緯度に応じてスケールバーの長さと数字を更新する (RefreshTilesから毎回呼ばれる)</summary>
+    void UpdateScaleBar()
+    {
+        if (_scaleLine == null) return;
+        double lat = WorldYToLat(_centerY, _zoom);
+        // 1画面ピクセルあたりの実距離 [m] (Webメルカトル)
+        double metersPerPx = 156543.03392 * Math.Cos(lat * Math.PI / 180.0) / (1 << _zoom);
+        if (metersPerPx <= 0) return;
+        // 120px以内に収まる一番大きいキリの良い距離を選ぶ
+        float meters = ScaleSteps[0];
+        foreach (var step in ScaleSteps)
+        {
+            if (step / metersPerPx <= 120.0) meters = step;
+        }
+        _scaleLine.style.width = (float)(meters / metersPerPx);
+        _scaleLabel.text = meters >= 1000f ? $"{meters / 1000f:0.#} km" : $"{meters:0} m";
+    }
+
     void RefreshTiles()
     {
         float w = resolvedStyle.width;
         float h = resolvedStyle.height;
         if (w <= 0 || h <= 0 || float.IsNaN(w) || float.IsNaN(h)) return;
+
+        UpdateScaleBar();
 
         double topLeftX = _centerX - w / 2.0;
         double topLeftY = _centerY - h / 2.0;
@@ -1027,9 +1102,9 @@ public class MapView : VisualElement
 
     void OnGenerateOverlay(MeshGenerationContext ctx)
     {
-        // 描くものが何もない (現在地ドットも含めて) ときだけ抜ける
+        // 描くものが何もない (現在地ドット・点マーカーも含めて) ときだけ抜ける
         if (_polygon.Count == 0 && _displayPolygons.Count == 0 && _forestPolygons.Count == 0
-            && !LocationProvider.HasFix) return;
+            && _pointMarkers.Count == 0 && !LocationProvider.HasFix) return;
 
         float w = resolvedStyle.width;
         float h = resolvedStyle.height;
@@ -1131,6 +1206,23 @@ public class MapView : VisualElement
             painter.strokeColor = green;
             painter.lineWidth = dragging ? 4f : 3f;
             painter.Stroke();
+        }
+
+        // 点マーカー (選木結果など)。白フチ+塗りの小さな丸
+        foreach (var (lonLat, color) in _pointMarkers)
+        {
+            var sp = new Vector2(
+                (float)(LonToWorldX(lonLat.x, _zoom) - topLeftX),
+                (float)(LatToWorldY(lonLat.y, _zoom) - topLeftY));
+            if (sp.x < -10f || sp.x > w + 10f || sp.y < -10f || sp.y > h + 10f) continue;
+            painter.BeginPath();
+            painter.Arc(sp, 5.5f, 0f, 360f);
+            painter.fillColor = Color.white;
+            painter.Fill();
+            painter.BeginPath();
+            painter.Arc(sp, 4f, 0f, 360f);
+            painter.fillColor = color;
+            painter.Fill();
         }
 
         // 現在地の青ドット (一番上に描く。自分がどの位置にいるかを見るため)

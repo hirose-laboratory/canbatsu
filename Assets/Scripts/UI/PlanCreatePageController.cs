@@ -29,6 +29,10 @@ public class PlanCreatePageController
     readonly Label _resultCaption;
     readonly PlanFormView _form;
 
+    // 測量済み区画 (GPX)。表示は青緑の下敷き (計画の緑・記録のオレンジと被らない色)
+    List<GpxImporter.GpxBoundary> _gpxBoundaries = new List<GpxImporter.GpxBoundary>();
+    static readonly Color GpxParcelColor = new Color(0f, 0.42f, 0.55f);
+
     double _areaHa; // 面積はフォームではなくポリゴンから計算する
     int _fetchVersion; // 範囲を確定し直したとき、前の森林簿検索の結果を捨てるための番号
 
@@ -47,12 +51,42 @@ public class PlanCreatePageController
         if (location == null) location = router.gameObject.AddComponent<LocationProvider>();
         location.StartUpdates();
 
-        // 地図を生成して差し込む。Fix済みなら現在地、無ければ吉野の山地 (吉野杉で有名) を初期表示
         _map = new MapView(router);
+
+        // 測量済みの所有区画 (GPX) を小班として下敷き表示する。
+        // 方針: GPXは区画の「表示」にだけ使い、間伐範囲はこの区画を見ながら指で描いて決める
+        // (森林簿は境界表示には使わず、樹種・林齢などの属性データだけに使う)
+        _gpxBoundaries = GpxImporter.LoadAll();
+        if (_gpxBoundaries.Count > 0)
+        {
+            var underlay = new List<MapView.DisplayPolygon>();
+            foreach (var b in _gpxBoundaries)
+            {
+                underlay.Add(new MapView.DisplayPolygon
+                {
+                    Points = b.Points,
+                    Color = GpxParcelColor,
+                    UserData = b,
+                });
+            }
+            _map.SetForestPolygons(underlay);
+        }
+        else
+        {
+            Debug.Log($"GPX区画なし (置き場所: {GpxImporter.FolderPath})");
+        }
+
+        // 初期表示: Fix済みなら現在地 > 区画 (GPX) があればそこ > 吉野の山地 (吉野杉で有名)
         if (LocationProvider.HasFix)
         {
             _map.SetCenter(LocationProvider.Latitude, LocationProvider.Longitude, 15);
             _autoCentered = true;
+        }
+        else if (_gpxBoundaries.Count > 0)
+        {
+            var all = new List<Vector2>();
+            foreach (var b in _gpxBoundaries) all.AddRange(b.Points);
+            _map.FitToPoints(all);
         }
         else
         {
@@ -70,8 +104,8 @@ public class PlanCreatePageController
         _map.UserInteracted += () => _userMovedMap = true;
 
         // 最初のFixが「まだ地図を触っていない間」に来たら一度だけ現在地へ寄せる
-        // (編集モードは既存範囲を見せたままにするので寄せない)
-        if (!_autoCentered && _editingPlan == null)
+        // (編集モードは既存範囲、区画があるときは区画を見せたままにするので寄せない。現在地ボタンはいつでも使える)
+        if (!_autoCentered && _editingPlan == null && _gpxBoundaries.Count == 0)
         {
             page.schedule.Execute(() =>
             {
