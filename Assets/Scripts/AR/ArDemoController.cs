@@ -506,8 +506,17 @@ public class ArDemoController : MonoBehaviour
         ClearMarkers();
 
         // 近すぎるペアをここで判定し直す (ML経由の木は IsTooClose が未設定のため)。
-        // しきい値は TreeDetectorMS の既定と同じ1.0m。計画のしきい値 (FellingIntervalM) との連動は今後
-        const float closePairMeters = 1.0f;
+        // しきい値は作業計画の設定値と連動: 伐採間隔 (FellingIntervalM) と伐採基準 (FellingStandardCm=この直径未満は間伐候補)
+        WorkPlan plan = null;
+        if (!string.IsNullOrEmpty(CurrentPlanId))
+        {
+            foreach (var p in PlanStore.Plans)
+            {
+                if (p.Id == CurrentPlanId) { plan = p; break; }
+            }
+        }
+        float closePairMeters = plan != null && plan.FellingIntervalM > 0.1f ? plan.FellingIntervalM : 1.0f;
+        int thinStandardCm = plan != null ? plan.FellingStandardCm : 0; // 0 = 基準なし
         var pairs = new List<(int a, int b, float d)>();
         foreach (var t in trees) t.IsTooClose = false;
         for (int i = 0; i < trees.Count; i++)
@@ -530,14 +539,20 @@ public class ArDemoController : MonoBehaviour
         {
             if (tree.IsTooClose) _tooCloseCount++;
             float dist = tree.HorizontalDistanceFrom(measureCamPos);
-            // 色の優先順位: 選木=赤 > 近すぎるペア (過密=間伐候補) のオレンジ > 通常の青
+            // 伐採基準: 太さが測れていて基準未満なら間伐候補 (近すぎペアと同じオレンジ)
+            int widthCm = Mathf.RoundToInt(tree.WidthMeters * 100f);
+            bool thin = thinStandardCm > 0 && tree.WidthMeters > 0.02f && widthCm < thinStandardCm;
+            // 色の優先順位: 選木=赤 > 間伐候補 (近すぎペア or 基準未満) のオレンジ > 通常の青
             bool selected = FindSelectedIndexNear(tree.TrunkBase) >= 0;
             var color = selected ? SelectedColor
-                : tree.IsTooClose ? new Color(1f, 0.55f, 0.1f)
+                : (tree.IsTooClose || thin) ? new Color(1f, 0.55f, 0.1f)
                 : new Color(0.35f, 0.6f, 1f);
             // ラベルは2行: 距離 + 太さ (幅の推定が小さすぎる=根拠不足のときは距離だけ)
             string label = $"{dist:F1}m";
-            if (tree.WidthMeters > 0.02f) label += $"\n太さ{Mathf.RoundToInt(tree.WidthMeters * 100f)}cm";
+            if (tree.WidthMeters > 0.02f)
+            {
+                label += $"\n太さ{widthCm}cm" + (thin ? " 基準未満" : "");
+            }
             if (selected) label = "伐 " + label;
             // 足元の高さは木ごとの局所地面 (斜面対応)。円柱の太さは幹の推定幅から
             PlaceMarker(tree.TrunkBase, label, color, tree.WidthMeters);
