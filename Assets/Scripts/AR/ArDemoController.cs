@@ -28,6 +28,10 @@ public class ArDemoController : MonoBehaviour
 
     // 作業中に計測した3D点群 (ワールド座標)。木検出 (TreeDetectorMS) の入力として蓄積する
     readonly List<Vector3> _cloudPoints = new List<Vector3>();
+    readonly List<List<Vector3>> _recentPairs = new List<List<Vector3>>(); // 直近ペア窓 (古い点は6DoFドリフトでずれるため捨てる)
+    MlTreeTracker _mlTracker; // ML幹検出 (null = モデル無し → 従来の幾何方式のみ)
+    LiveViewStreamer _liveView; // 検証・デモ用ライブ配信 (同一Wi-Fiのブラウザで視聴。視聴者ゼロなら負荷ゼロ)
+    float _gazeDownTimer; // 足元 (真下) を2秒見続けると計測リセット (検証アプリと同じ操作)
     int _treeCount;
     int _tooCloseCount; // 検出中の木のうち近接ペア (過密=オレンジ) の本数
     int _measureCount;  // 成功した計測の回数 (HUD表示用)
@@ -84,6 +88,13 @@ public class ArDemoController : MonoBehaviour
         _instance != null && _instance._motionStereo != null
             ? ($"{_instance._motionStereo.Hud} {_instance._motionStereo.ResultText} " +
                $"| 計測{_instance._measureCount}回 点群{_instance._cloudPoints.Count} 木{_instance._treeCount}本").Trim()
+            : "";
+
+    /// <summary>ライブ配信の視聴アドレス (ip:port)。配信していなければ空文字。
+    /// 長い計測行に混ぜると画面端で見切れるため、独立した行として表示すること</summary>
+    public static string LiveViewUrl =>
+        _instance != null && _instance._liveView != null && !string.IsNullOrEmpty(_instance._liveView.Url)
+            ? _instance._liveView.Url.Replace("http://", "").TrimEnd('/')
             : "";
 
     /// <summary>作業開始: 初回はXRごと立ち上げ、2回目以降はコンテンツだけ再構築する</summary>
@@ -163,6 +174,14 @@ public class ArDemoController : MonoBehaviour
         _motionStereo = null;
         _markers.Clear();
         _cloudPoints.Clear();
+        _recentPairs.Clear();
+        if (_mlTracker != null)
+        {
+            _mlTracker.Reset();
+            _mlTracker.Detector?.Dispose(); // GPUリソース (推論Worker) を解放。次の作業開始で作り直す
+            _mlTracker = null;
+        }
+        _liveView = null; // 実体はWorkContentと一緒に破棄され、配信サーバーはOnDestroyで停止する
         _treeCount = 0;
         _tooCloseCount = 0;
         _measureCount = 0;
@@ -249,6 +268,29 @@ public class ArDemoController : MonoBehaviour
                 if (marker.label != null) BillboardToCamera(marker.label.transform);
             }
             if (_kakarigi.LabelTransform != null) BillboardToCamera(_kakarigi.LabelTransform);
+
+            // リセットジェスチャー: 足元 (真下58度以上) を2秒見続けると計測をやり直す
+            if (_workRoot != null && _motionStereo != null)
+            {
+                bool lookingDown = Vector3.Dot(_arCamera.transform.forward, Vector3.down) > 0.85f;
+                if (lookingDown)
+                {
+                    _gazeDownTimer += Time.deltaTime;
+                    if (_gazeDownTimer >= 2f)
+                    {
+                        ResetSurvey();
+                        _gazeDownTimer = -3f; // 連続発動を防ぐクールダウン
+                    }
+                    else if (_gazeDownTimer > 0.5f)
+                    {
+                        ShowFeedback($"リセットまで {2f - _gazeDownTimer:F1} 秒 (足元を見続ける)");
+                    }
+                }
+                else
+                {
+                    _gazeDownTimer = 0f;
+                }
+            }
         }
 
         if (_statusText == null) return;
@@ -360,7 +402,37 @@ public class ArDemoController : MonoBehaviour
         _motionStereo.trackedCamera = _arCamera; // シーンの2D用Main Cameraを掴まないように明示
         _motionStereo.saveKeyframes = false;
         _motionStereo.showDebugHud = false;
+        // 三角測量の品質を検証アプリと同一に締める (点の質が上がり、1回の計測も速くなる)
+        _motionStereo.EstimatorConfig.MaxRaySkewMeters = 0.15f;
+        _motionStereo.EstimatorConfig.MinDistance = 0.5f;
+        _motionStereo.EstimatorConfig.MaxDistance = 25f;
         _motionStereo.OnResult += OnMeasured;
+
+        // ML幹検出 (Resources/AR/trunk_mix.onnx)。読込失敗時は null → 幾何方式のみで従来どおり動く
+        _mlTracker = new MlTreeTracker { Detector = TrunkDetectorML.TryCreate() };
+        StartCoroutine(WarmUpMl());
+
+        // 検証・デモ用ライブ配信: 同一Wi-Fi (スマホテザリング可・圏外OK) のブラウザで
+        // 装着者視点 (実景+マーカー合成) を視聴できる。URLは作業中ページの診断行に表示
+        _liveView = _workRoot.AddComponent<LiveViewStreamer>();
+        _liveView.sourceCamera = _arCamera;
+        _liveView.hideDuringRender = _hudRoot != null ? _hudRoot.transform : null;
+    }
+
+    /// <summary>ML推論の初回はGPUシェーダー準備で4〜8秒かかるため、起動直後に空推論で温めておく</summary>
+    System.Collections.IEnumerator WarmUpMl()
+    {
+        if (_mlTracker == null || _mlTracker.Detector == null) yield break;
+        yield return new WaitForSeconds(2f); // AR起動処理が落ち着いてから
+        var dummy = new MsKeyframe
+        {
+            Width = 1280, Height = 720,
+            Fx = 608f, Fy = 608f, Cx = 640f, Cy = 360f,
+            Image = new float[1280 * 720],
+        };
+        try { _mlTracker.Detector.Detect(dummy); }
+        catch (System.Exception e) { Debug.LogWarning("[TrunkML] warmup失敗: " + e.Message); }
+        Debug.Log("[TrunkML] warmup完了");
     }
 
     /// <summary>
@@ -370,22 +442,42 @@ public class ArDemoController : MonoBehaviour
     /// </summary>
     void OnMeasured(MsResult result)
     {
-        if (!result.Success || _motionStereo == null) return;
-        LatestDistanceMeters = result.TargetDistanceMeters;
-        _measureCount++;
+        if (_motionStereo == null) return;
+        if (result.Success)
+        {
+            LatestDistanceMeters = result.TargetDistanceMeters;
+            _measureCount++;
+        }
 
         var kf = _motionStereo.LastKeyframeA;
         if (kf == null || _workRoot == null) return;
+        // 中央に対象が無い (Success=false) ペアの点群も木検出には使える。弱いペアだけ捨てる
+        if (result.Points.Count < 30) return;
 
+        // 蓄積は直近6ペアまで (古いペアは6DoFドリフトでずれ、位置ズレ・誤検出の原因になる)
+        var pairPts = new List<Vector3>(result.Points.Count);
         foreach (var p in result.Points)
         {
-            _cloudPoints.Add(p.WorldPosition);
+            pairPts.Add(p.WorldPosition);
         }
+        _recentPairs.Add(pairPts);
+        while (_recentPairs.Count > 6) _recentPairs.RemoveAt(0);
+        _cloudPoints.Clear();
+        foreach (var pp in _recentPairs) _cloudPoints.AddRange(pp);
 
         // 距離フィルタの基準は計測時のカメラ位置 (10m超の検出は誤差が大きいので既定で除外される)
         // 地面の高さは木ごとの MsTree.GroundY (局所地面、斜面対応) を使う
         var trees = TreeDetectorMS.Detect(
-            _cloudPoints, kf.CamPosition.y, kf.CamPosition, out _, out _);
+            _cloudPoints, kf.CamPosition.y, kf.CamPosition, out float ground, out _);
+
+        // ML幹検出: 確定した木があれば幾何方式の結果を置き換える。
+        // MLは「2回以上の計測で確認できた木」だけを返す (幽霊対策) ため、序盤1〜2回は幾何方式のまま。
+        // スケール較正は未導入なので sessionScale=1 (SLAM座標をそのまま実寸として扱う)
+        var mlTrees = _mlTracker != null
+            ? _mlTracker.Track(result, kf, 1f, ground, kf.CamPosition)
+            : null;
+        if (mlTrees != null && mlTrees.Count > 0) trees = mlTrees;
+
         _treeCount = trees.Count;
         _latestTrees = trees;                 // 視線選木の対象として保持する
         _latestMeasureCamPos = kf.CamPosition;
@@ -395,7 +487,7 @@ public class ArDemoController : MonoBehaviour
             RebuildTreeMarkers(trees, kf.CamPosition);
             TryAlignSavedMap(trees); // 保存済みマップと幹配置を照合し、復元マーカーを精密位置へ置き直す
         }
-        else
+        else if (result.Success)
         {
             // まだ幹として確定できる点群がない。従来どおり画像中央の対象に仮マーカーを出して手応えは返す
             float u = kf.Width * 0.5f;
@@ -412,23 +504,108 @@ public class ArDemoController : MonoBehaviour
     void RebuildTreeMarkers(List<MsTree> trees, Vector3 measureCamPos)
     {
         ClearMarkers();
+
+        // 近すぎるペアをここで判定し直す (ML経由の木は IsTooClose が未設定のため)。
+        // しきい値は TreeDetectorMS の既定と同じ1.0m。計画のしきい値 (FellingIntervalM) との連動は今後
+        const float closePairMeters = 1.0f;
+        var pairs = new List<(int a, int b, float d)>();
+        foreach (var t in trees) t.IsTooClose = false;
+        for (int i = 0; i < trees.Count; i++)
+        {
+            for (int j = i + 1; j < trees.Count; j++)
+            {
+                float dx = trees[i].X - trees[j].X, dz = trees[i].Z - trees[j].Z;
+                float d = Mathf.Sqrt(dx * dx + dz * dz);
+                if (d < closePairMeters)
+                {
+                    pairs.Add((i, j, d));
+                    trees[i].IsTooClose = true;
+                    trees[j].IsTooClose = true;
+                }
+            }
+        }
+
         _tooCloseCount = 0;
         foreach (var tree in trees)
         {
             if (tree.IsTooClose) _tooCloseCount++;
             float dist = tree.HorizontalDistanceFrom(measureCamPos);
-            // 色の優先順位: 選木=赤 > 近すぎるペア (過密=間伐候補) のオレンジ > 通常の緑
+            // 色の優先順位: 選木=赤 > 近すぎるペア (過密=間伐候補) のオレンジ > 通常の青
             bool selected = FindSelectedIndexNear(tree.TrunkBase) >= 0;
             var color = selected ? SelectedColor
                 : tree.IsTooClose ? new Color(1f, 0.55f, 0.1f)
-                : new Color(0.3f, 1f, 0.5f);
+                : new Color(0.35f, 0.6f, 1f);
             // ラベルは2行: 距離 + 太さ (幅の推定が小さすぎる=根拠不足のときは距離だけ)
             string label = $"{dist:F1}m";
             if (tree.WidthMeters > 0.02f) label += $"\n太さ{Mathf.RoundToInt(tree.WidthMeters * 100f)}cm";
             if (selected) label = "伐 " + label;
-            // 足元の高さは木ごとの局所地面 (斜面対応)
-            PlaceMarker(tree.TrunkBase, label, color);
+            // 足元の高さは木ごとの局所地面 (斜面対応)。円柱の太さは幹の推定幅から
+            PlaceMarker(tree.TrunkBase, label, color, tree.WidthMeters);
         }
+
+        // 近すぎるペアは幹の間に棒を渡して間隔を表示 (どの木とどの木のペアかを明示)
+        foreach (var (a, b, d) in pairs)
+        {
+            PlacePairBar(trees[a], trees[b], d);
+        }
+    }
+
+    /// <summary>近すぎるペアの2本の幹の間に棒を渡し、中点に間隔を表示する</summary>
+    void PlacePairBar(MsTree a, MsTree b, float distMeters)
+    {
+        var root = new GameObject("ClosePairBar");
+        root.transform.SetParent(_workRoot.transform);
+        var barColor = new Color(1f, 0.45f, 0.2f);
+        float y = (a.GroundY + b.GroundY) * 0.5f + 1.2f;
+        var pA = new Vector3(a.X, y, a.Z);
+        var pB = new Vector3(b.X, y, b.Z);
+
+        var bar = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        bar.transform.SetParent(root.transform, false);
+        Destroy(bar.GetComponent<Collider>());
+        bar.transform.position = (pA + pB) * 0.5f;
+        bar.transform.rotation = Quaternion.FromToRotation(Vector3.up, pB - pA);
+        bar.transform.localScale = new Vector3(0.15f, Vector3.Distance(pA, pB) * 0.5f, 0.15f); // 円柱は高さ2unit基準
+        bar.GetComponent<Renderer>().material = MakeUnlit(barColor);
+
+        foreach (var pe in new[] { pA, pB }) // 両端の球で「どの木のペアか」を明示
+        {
+            var s = GameObject.CreatePrimitive(PrimitiveType.Sphere);
+            s.transform.SetParent(root.transform, false);
+            Destroy(s.GetComponent<Collider>());
+            s.transform.position = pe;
+            s.transform.localScale = Vector3.one * 0.32f;
+            s.GetComponent<Renderer>().material = MakeUnlit(barColor);
+        }
+
+        var labelGo = new GameObject("PairLabel");
+        labelGo.transform.SetParent(root.transform, false);
+        labelGo.transform.position = (pA + pB) * 0.5f + new Vector3(0f, -0.2f, 0f); // 棒の下側 (木ラベルと重ねない)
+        var label = labelGo.AddComponent<TextMesh>();
+        label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        label.GetComponent<MeshRenderer>().material = label.font.material;
+        label.fontSize = 48;
+        label.characterSize = 0.014f;
+        label.anchor = TextAnchor.UpperCenter;
+        label.color = barColor;
+        label.text = $"{distMeters:F2}m";
+
+        _markers.Add((root, label)); // ラベルのビルボードと一括破棄は既存の仕組みに乗せる
+    }
+
+    /// <summary>計測のやり直し: 点群・ML追跡・検出マーカーを消す。
+    /// 選木済み (_selected) と保存マップの復元マーカーは作業成果なので消さない</summary>
+    void ResetSurvey()
+    {
+        _recentPairs.Clear();
+        _cloudPoints.Clear();
+        _mlTracker?.Reset();
+        _latestTrees.Clear();
+        ClearMarkers();
+        _treeCount = 0;
+        _tooCloseCount = 0;
+        ShowFeedback("計測をリセットしました");
+        Debug.Log("[ArWork] 計測リセット (足元注視)");
     }
 
     void ClearMarkers()
@@ -440,31 +617,34 @@ public class ArDemoController : MonoBehaviour
         _markers.Clear();
     }
 
-    /// <summary>木マーカー: 足元の輪 + ラベル (ラベルの向きはUpdateで毎フレームカメラへ向ける)</summary>
-    void PlaceMarker(Vector3 groundPos, string text, Color color)
+    /// <summary>木マーカー: 幹に重なる縦の円柱 + ラベル (ラベルの向きはUpdateで毎フレームカメラへ向ける)</summary>
+    void PlaceMarker(Vector3 groundPos, string text, Color color, float widthMeters = 0.25f)
     {
-        var marker = CreateMarker(groundPos, text, color);
+        var marker = CreateMarker(groundPos, text, color, widthMeters);
         _markers.Add(marker);
     }
 
-    /// <summary>マーカーの実体を作る (検出マーカーと復元マーカーで共用)</summary>
-    (GameObject root, TextMesh label) CreateMarker(Vector3 groundPos, string text, Color color)
+    /// <summary>マーカーの実体を作る (検出マーカーと復元マーカーで共用)。
+    /// 検証アプリと同じ「高さ2mの縦円柱」方式 (足元の輪より遠目でも見やすい)</summary>
+    (GameObject root, TextMesh label) CreateMarker(Vector3 groundPos, string text, Color color, float widthMeters = 0.25f)
     {
         var root = new GameObject($"TreeMarker_{_markers.Count + _restoredMarkers.Count}");
         root.transform.SetParent(_workRoot.transform);
         root.transform.position = groundPos;
 
-        var ring = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
-        ring.name = "Ring";
-        ring.transform.SetParent(root.transform, false);
-        ring.transform.localPosition = new Vector3(0f, 0.02f, 0f);
-        ring.transform.localScale = new Vector3(0.8f, 0.02f, 0.8f);
-        Destroy(ring.GetComponent<Collider>());
-        ring.GetComponent<Renderer>().material = MakeUnlit(color);
+        const float markerHeight = 2.0f;
+        var trunk = GameObject.CreatePrimitive(PrimitiveType.Cylinder);
+        trunk.name = "Trunk";
+        trunk.transform.SetParent(root.transform, false);
+        trunk.transform.localPosition = new Vector3(0f, markerHeight * 0.5f, 0f);
+        float w = Mathf.Clamp(widthMeters * 0.6f, 0.10f, 0.35f); // 幹の推定幅の6割 (実物を隠しすぎない)
+        trunk.transform.localScale = new Vector3(w, markerHeight * 0.5f, w); // 円柱は高さ2unit基準
+        Destroy(trunk.GetComponent<Collider>());
+        trunk.GetComponent<Renderer>().material = MakeUnlit(color);
 
         var labelGo = new GameObject("Label");
         labelGo.transform.SetParent(root.transform, false);
-        labelGo.transform.localPosition = new Vector3(0f, 1.4f, 0f);
+        labelGo.transform.localPosition = new Vector3(0f, markerHeight + 0.35f, 0f); // 円柱の頭上
         var label = labelGo.AddComponent<TextMesh>();
         label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         label.GetComponent<MeshRenderer>().material = label.font.material;

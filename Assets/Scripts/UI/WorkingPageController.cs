@@ -72,9 +72,12 @@ public class WorkingPageController
             {
                 diag += $" 撮影:{capture.SavedCount}枚 ({capture.SavedBytes / (1024 * 1024)}MB)";
             }
-            statusLabel.text = string.IsNullOrEmpty(measure)
+            // ライブ配信の視聴アドレスは短い独立行で出す (長い計測行に混ぜると画面端で見切れる)
+            string live = ArDemoController.LiveViewUrl;
+            statusLabel.text = (string.IsNullOrEmpty(measure)
                 ? $"{cameraStatus}\n{diag}"
-                : $"{cameraStatus}\n{diag}\n計測: {measure}";
+                : $"{cameraStatus}\n{diag}\n計測: {measure}")
+                + (string.IsNullOrEmpty(live) ? "" : $"\n配信: {live}");
         }).Every(100);
 
         // 実施中の計画の概要
