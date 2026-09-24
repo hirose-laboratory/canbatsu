@@ -60,6 +60,10 @@ public class HomePageController
         // 作業で撮り溜めた画像の未送信分があれば送りにいく (Wi-Fi接続時のみ。ホームに戻るたびに再挑戦)
         CaptureUploader.KickUploadPending(router);
 
+        // 日本全域のベース地図 (z5〜10、標準地図) をWi-Fi時に一括保存する。
+        // 山奥の圏外でも地図が開けるようにするための土台 (完了済みなら何もしない。中断からの再開も可)
+        TilePrefetcher.PrefetchJapanBase(router);
+
         Refresh();
     }
 

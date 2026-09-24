@@ -181,6 +181,7 @@ public class ArDemoController : MonoBehaviour
         {
             _mlTracker.Reset();
             _mlTracker.Detector?.Dispose(); // GPUリソース (推論Worker) を解放。次の作業開始で作り直す
+            _mlTracker.BendClassifier?.Dispose();
             _mlTracker = null;
         }
         _liveView = null; // 実体はWorkContentと一緒に破棄され、配信サーバーはOnDestroyで停止する
@@ -422,7 +423,11 @@ public class ArDemoController : MonoBehaviour
         _motionStereo.OnResult += OnMeasured;
 
         // ML幹検出 (Resources/AR/trunk_mix.onnx)。読込失敗時は null → 幾何方式のみで従来どおり動く
-        _mlTracker = new MlTreeTracker { Detector = TrunkDetectorML.TryCreate() };
+        _mlTracker = new MlTreeTracker
+        {
+            Detector = TrunkDetectorML.TryCreate(),
+            BendClassifier = BendClassifierML.TryCreate(), // 曲がり木分類 (モデルが無ければnull=判定なし)
+        };
         StartCoroutine(WarmUpMl());
 
         // 検証・デモ用ライブ配信: 同一Wi-Fi (スマホテザリング可・圏外OK) のブラウザで
@@ -445,6 +450,7 @@ public class ArDemoController : MonoBehaviour
         };
         try { _mlTracker.Detector.Detect(dummy); }
         catch (System.Exception e) { Debug.LogWarning("[TrunkML] warmup失敗: " + e.Message); }
+        _mlTracker.BendClassifier?.WarmUp();
         Debug.Log("[TrunkML] warmup完了");
     }
 
@@ -555,10 +561,12 @@ public class ArDemoController : MonoBehaviour
             // 伐採基準: 太さが測れていて基準未満なら間伐候補 (近すぎペアと同じオレンジ)
             int widthCm = Mathf.RoundToInt(tree.WidthMeters * 100f);
             bool thin = thinStandardCm > 0 && tree.WidthMeters > 0.02f && widthCm < thinStandardCm;
-            // 色の優先順位: 選木=赤 > 間伐候補 (近すぎペア or 基準未満) のオレンジ > 通常の青
+            // 曲がり木: 分類モデルのスコアがしきい値以上なら間伐候補 (形質不良は優先的に伐る対象)
+            bool bent = tree.BentScore >= BendClassifierML.Threshold;
+            // 色の優先順位: 選木=赤 > 間伐候補 (近すぎペア or 基準未満 or 曲がり) のオレンジ > 通常の青
             bool selected = FindSelectedIndexNear(tree.TrunkBase) >= 0;
             var color = selected ? SelectedColor
-                : (tree.IsTooClose || thin) ? new Color(1f, 0.55f, 0.1f)
+                : (tree.IsTooClose || thin || bent) ? new Color(1f, 0.55f, 0.1f)
                 : new Color(0.35f, 0.6f, 1f);
             // ラベルは2行: 距離 + 太さ (幅の推定が小さすぎる=根拠不足のときは距離だけ)
             string label = $"{dist:F1}m";
@@ -566,6 +574,7 @@ public class ArDemoController : MonoBehaviour
             {
                 label += $"\n太さ{widthCm}cm" + (thin ? " 基準未満" : "");
             }
+            if (bent) label += "\n曲がり候補";
             if (selected) label = "伐 " + label;
             // 足元の高さは木ごとの局所地面 (斜面対応)。円柱の太さは幹の推定幅から
             PlaceMarker(tree.TrunkBase, label, color, tree.WidthMeters);

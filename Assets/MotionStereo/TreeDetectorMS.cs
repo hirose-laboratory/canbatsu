@@ -16,6 +16,7 @@ namespace CanbatsuMS
         public bool IsTooClose;       // 他の木と近すぎる
         public bool IsManual;         // 手動タグ付けされた木(うなずき操作)
         public int SeenCount;         // ML検出で確認された回数(MlTreeTrackerが使用。2回以上で表示=幽霊対策)
+        public float BentScore = -1f; // 曲がり分類の確率0〜1 (BendClassifierML。未判定は-1。複数回見えたら最大値を保持)
         public Vector3 TrunkBase => new Vector3(X, GroundY, Z);
 
         public float HorizontalDistanceFrom(Vector3 p)

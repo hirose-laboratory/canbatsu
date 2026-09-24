@@ -61,7 +61,55 @@ public class MapView : VisualElement
     readonly VisualElement _labelTileLayer; // 航空写真の上に重ねる地名タイル
     readonly VisualElement _overlay;
     readonly Dictionary<string, Image> _tiles = new Dictionary<string, Image>();
-    readonly Dictionary<string, Texture2D> _textureCache = new Dictionary<string, Texture2D>();
+    // デコード済みタイルのメモリキャッシュ。ページを開き直すたびにMapViewは作り直されるため、
+    // インスタンス間で共有しないと毎回全タイルを読み直して表示が遅い (特に計画作成ページ)。
+    // LRUで上限を超えた分は破棄する (表示中のタイルは毎回触られるので追い出されない)
+    const int TextureCacheCap = 300; // 256px ≒ 200KB/枚 → 上限でも60MB程度
+    static readonly Dictionary<string, Texture2D> _textureCache = new Dictionary<string, Texture2D>();
+    static readonly LinkedList<string> _textureLru = new LinkedList<string>();
+    static readonly Dictionary<string, LinkedListNode<string>> _lruNodes =
+        new Dictionary<string, LinkedListNode<string>>();
+
+    /// <summary>キャッシュにタイルを入れ、LRUの先頭へ。あふれた分は古い順に破棄する</summary>
+    static void CacheTexture(string key, Texture2D texture)
+    {
+        if (_lruNodes.TryGetValue(key, out var node))
+        {
+            _textureLru.Remove(node);
+            _textureLru.AddFirst(node);
+            _textureCache[key] = texture;
+            return;
+        }
+        _textureCache[key] = texture;
+        _lruNodes[key] = _textureLru.AddFirst(key);
+        while (_textureLru.Count > TextureCacheCap)
+        {
+            string evict = _textureLru.Last.Value;
+            _textureLru.RemoveLast();
+            _lruNodes.Remove(evict);
+            if (_textureCache.TryGetValue(evict, out var old))
+            {
+                _textureCache.Remove(evict);
+                // 最近使っていない=画面に出ていないタイル。Texture2DはGCでは解放されないので明示破棄
+                if (old != null) UnityEngine.Object.Destroy(old);
+            }
+        }
+    }
+
+    /// <summary>キャッシュのタイルを返しつつLRUの先頭へ (表示中のタイルを追い出さないため)</summary>
+    static bool TryGetCachedTexture(string key, out Texture2D texture)
+    {
+        if (_textureCache.TryGetValue(key, out texture))
+        {
+            if (_lruNodes.TryGetValue(key, out var node))
+            {
+                _textureLru.Remove(node);
+                _textureLru.AddFirst(node);
+            }
+            return true;
+        }
+        return false;
+    }
     readonly HashSet<string> _loading = new HashSet<string>();
 
     // 範囲選択ポリゴン (緯度経度で保持するのでズームしてもずれない)
@@ -167,6 +215,10 @@ public class MapView : VisualElement
         _overlay.generateVisualContent += OnGenerateOverlay;
         _content.Add(_overlay);
 
+        // 地図を見ている間はタイルの先読みを止める (直列DLでも表示用の取得と回線を取り合うため)
+        RegisterCallback<AttachToPanelEvent>(_ => TilePrefetcher.MapVisibleCount++);
+        RegisterCallback<DetachFromPanelEvent>(_ => TilePrefetcher.MapVisibleCount--);
+
         RegisterCallback<GeometryChangedEvent>(_ =>
         {
             RefreshTiles();
@@ -208,7 +260,8 @@ public class MapView : VisualElement
         _zoom = Mathf.Clamp(zoom, MinZoom, MaxZoom);
         _centerX = LonToWorldX(longitude, _zoom);
         _centerY = LatToWorldY(latitude, _zoom);
-        ClearTileElements();
+        // タイルは破棄しない (RefreshTilesが画面外だけ外し、読み込み済みは使い回す)。
+        // GPS到着時の現在地への寄せ直しなどで毎回全タイルを読み直すと重いため
         ClampCenter();
         RefreshTiles();
         _overlay.MarkDirtyRepaint();
@@ -989,7 +1042,7 @@ public class MapView : VisualElement
         _tiles[key] = image;
         parent.Add(image);
 
-        if (_textureCache.TryGetValue(key, out var cached))
+        if (TryGetCachedTexture(key, out var cached))
         {
             image.image = cached;
         }
@@ -999,7 +1052,7 @@ public class MapView : VisualElement
             var diskTexture = LoadTileFromDisk(cachePath);
             if (diskTexture != null)
             {
-                _textureCache[key] = diskTexture;
+                CacheTexture(key, diskTexture);
                 image.image = diskTexture;
             }
             else if (_runner != null && !_loading.Contains(key))
@@ -1088,7 +1141,7 @@ public class MapView : VisualElement
             if (request.result == UnityWebRequest.Result.Success)
             {
                 var texture = DownloadHandlerTexture.GetContent(request);
-                _textureCache[key] = texture;
+                CacheTexture(key, texture);
                 if (_tiles.TryGetValue(key, out var image))
                 {
                     image.image = texture;

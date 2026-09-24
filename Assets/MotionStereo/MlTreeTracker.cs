@@ -26,6 +26,9 @@ namespace CanbatsuMS
         /// <summary>ML検出器。nullのとき Track() はnullを返す(呼び側でフォールバック)</summary>
         public TrunkDetectorML Detector;
 
+        /// <summary>曲がり木分類 (任意)。nullなら曲がり判定なし (BentScoreは-1のまま)</summary>
+        public BendClassifierML BendClassifier;
+
         /// <summary>この回数以上のペアで確認できた木だけを返す(幽霊対策)</summary>
         public int MinSeenCount = 2;
         /// <summary>基準位置からこの距離[m]を超えた木は蓄積から破棄</summary>
@@ -112,6 +115,9 @@ namespace CanbatsuMS
 
                 // 幹の太さ: 箱内の輝度エッジで実測(箱は枝や傾きで広めに出るため)。
                 // 取れない場合は箱幅×0.7の概算にフォールバック
+                // 曲がり分類 (幹の箱を切り出して判定。細すぎる箱は-1=未判定)
+                float bent = BendClassifier != null ? BendClassifier.Classify(kf, b) : -1f;
+
                 float wpx = TrunkDetectorML.RefineWidthPx(kf, b);
                 if (wpx <= 0) wpx = (b.U1 - b.U0) * 0.7f;
                 var tree = new MsTree
@@ -121,17 +127,21 @@ namespace CanbatsuMS
                     PointCount = cluster.Count,
                     WidthMeters = Mathf.Clamp(wpx / kf.Fx * md, 0.08f, 0.8f),
                     YExtent = (b.V1 - b.V0) / kf.Fy * md,
+                    BentScore = bent,
                 };
 
                 // 同一フレーム内の重複(1本の木に複数の箱)は点数の多い方に統合。
                 // しきい値は小さく=同一フレームで離れて写る2箱は別の木(併木)として残す
+                // 曲がりスコアは「どこかの箱で曲がって見えた」を残したいので最大値を引き継ぐ
                 bool dupInFrame = false;
                 for (int i = 0; i < frameTrees.Count; i++)
                 {
                     float fdx = frameTrees[i].X - mx, fdz = frameTrees[i].Z - mz;
                     if (fdx * fdx + fdz * fdz < FrameDedupMeters * FrameDedupMeters)
                     {
+                        float maxBent = Mathf.Max(tree.BentScore, frameTrees[i].BentScore);
                         if (tree.PointCount > frameTrees[i].PointCount) frameTrees[i] = tree;
+                        frameTrees[i].BentScore = maxBent;
                         dupInFrame = true;
                         break;
                     }
@@ -154,6 +164,8 @@ namespace CanbatsuMS
                 if (best >= 0)
                 {
                     tree.SeenCount = _trees[best].SeenCount + 1;
+                    // 曲がりは角度によって見えたり見えなかったりするので最大値を保持する
+                    tree.BentScore = Mathf.Max(tree.BentScore, _trees[best].BentScore);
                     _trees[best] = tree;
                 }
                 else
@@ -172,9 +184,11 @@ namespace CanbatsuMS
                     if (ddx * ddx + ddz * ddz < ConsolidateMeters * ConsolidateMeters)
                     {
                         int seen = _trees[i].SeenCount + _trees[j].SeenCount;
+                        float maxBent = Mathf.Max(_trees[i].BentScore, _trees[j].BentScore);
                         if (_trees[j].PointCount > _trees[i].PointCount)
                             _trees[i] = _trees[j];
                         _trees[i].SeenCount = seen;
+                        _trees[i].BentScore = maxBent;
                         _trees.RemoveAt(j);
                     }
                 }

@@ -24,11 +24,83 @@ public static class TilePrefetcher
     /// <summary>StatusTextが変わるたびに発火 (画面側の進捗表示の更新に使う)</summary>
     public static event Action ProgressChanged;
 
+    /// <summary>
+    /// 表示中のMapViewの数 (MapViewが付け外しで増減させる)。
+    /// 1以上の間はダウンロードを一時停止し、地図表示用のタイル取得と回線を取り合わないようにする
+    /// </summary>
+    public static int MapVisibleCount;
+
     // ダウンロード待ちの行列。実行中に別の計画が保存されたら同じコルーチンが続けて処理する
-    static readonly Queue<(string url, string path)> _queue = new Queue<(string url, string path)>();
+    static readonly Queue<(string url, string path, bool isBase)> _queue =
+        new Queue<(string url, string path, bool isBase)>();
     static int _total; // 今回のバッチの総枚数 (完了で0に戻す)
     static int _done;
+    static int _baseRemaining; // 日本全域ベースの残り枚数 (0になったら完了マーカーを書く)
+    static bool _baseHadFailure; // ベース保存で失敗タイルがあったか (あれば完了扱いにせず次回再開)
     static bool _running;
+
+    // ---- 日本全域のベース地図 (山奥のオフラインでも地図が開けるように) ----
+    //
+    // 全国を詳細ズームまで保存するのは数十GB級で不可能なので、ベースはz10まで
+    // (全国どこでも開ける粗い地図)。詳細は「計画保存時の範囲先読み(z12-17)」と
+    // 「一度見た場所の自動キャッシュ」が担う三層構成。
+    const int JapanMinZoom = 5;
+    const int JapanMaxZoom = 10;
+    const double JapanMinLat = 24.0, JapanMaxLat = 45.8;   // 沖縄〜北海道
+    const double JapanMinLng = 122.5, JapanMaxLng = 146.5; // 与那国〜択捉
+
+    /// <summary>ベース保存完了の目印ファイル (これがあれば二度目以降は何もしない)</summary>
+    static string JapanDoneMarker =>
+        Path.Combine(Application.persistentDataPath, "tiles", "japan_base_v1.done");
+
+    /// <summary>
+    /// 日本全域のベース地図 (標準地図 z5〜10、約90〜150MB) をWi-Fi接続時に一括保存する。
+    /// 完了済みなら何もしない。途中で落ちても保存済みタイルはスキップされるので再開できる。
+    /// ホーム表示のたびに呼んでよい (冪等)。
+    /// </summary>
+    public static void PrefetchJapanBase(MonoBehaviour runner)
+    {
+        if (runner == null) return;
+        if (File.Exists(JapanDoneMarker)) return;
+        if (_baseRemaining > 0) return; // すでに積んである
+        // 全国分は量があるのでWi-Fiのときだけ (計画範囲の先読みは従来どおり回線を問わない)
+        if (Application.internetReachability != NetworkReachability.ReachableViaLocalAreaNetwork) return;
+
+        int added = 0;
+        for (int z = JapanMinZoom; z <= JapanMaxZoom; z++)
+        {
+            foreach (var tile in CollectZoomTiles(z, JapanMinLat, JapanMaxLat, JapanMinLng, JapanMaxLng))
+            {
+                if (!tile.url.Contains("/std/")) continue; // ベースは標準地図のみ (既定レイヤー)
+                if (File.Exists(tile.path)) continue;
+                _queue.Enqueue((tile.url, tile.path, true));
+                added++;
+            }
+        }
+        if (added == 0)
+        {
+            WriteJapanDoneMarker(); // 全部保存済みだった
+            return;
+        }
+        _baseRemaining = added;
+        _total += added;
+        if (_running) UpdateStatus();
+        else runner.StartCoroutine(DownloadLoop());
+    }
+
+    static void WriteJapanDoneMarker()
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(JapanDoneMarker));
+            File.WriteAllText(JapanDoneMarker, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+            Debug.Log("[TilePrefetcher] 日本全域ベース地図の保存が完了");
+        }
+        catch (Exception e)
+        {
+            Debug.LogWarning($"完了マーカーの書き込みに失敗: {e.Message}");
+        }
+    }
 
     /// <summary>
     /// 指定したポリゴン (x=経度, y=緯度) 周辺のタイルの先読みを開始する。
@@ -75,7 +147,7 @@ public static class TilePrefetcher
             foreach (var tile in tiles)
             {
                 if (File.Exists(tile.path)) continue;
-                _queue.Enqueue(tile);
+                _queue.Enqueue((tile.url, tile.path, false));
                 added++;
             }
         }
@@ -137,7 +209,10 @@ public static class TilePrefetcher
             UpdateStatus();
             while (_queue.Count > 0)
             {
-                var (url, path) = _queue.Dequeue();
+                // 地図を開いている間は先読みを止めて表示を優先する (閉じたら再開)
+                while (MapVisibleCount > 0) yield return null;
+
+                var (url, path, isBase) = _queue.Dequeue();
                 using (var request = UnityWebRequest.Get(url))
                 {
                     yield return request.SendWebRequest();
@@ -151,11 +226,28 @@ public static class TilePrefetcher
                         catch (Exception e)
                         {
                             Debug.LogWarning($"タイルの保存に失敗: {e.Message}");
+                            if (isBase) _baseHadFailure = true;
                         }
+                    }
+                    else if (isBase)
+                    {
+                        _baseHadFailure = true; // 穴あきのまま完了扱いにしない (次回ホーム表示で再開)
                     }
                     // 失敗 (圏外など) はスキップして続行。次回の保存時に再挑戦される
                 }
                 _done++;
+                if (isBase && --_baseRemaining == 0)
+                {
+                    if (_baseHadFailure)
+                    {
+                        Debug.Log("[TilePrefetcher] 日本地図の保存に失敗分あり。次回Wi-Fi時に残りを再開する");
+                    }
+                    else
+                    {
+                        WriteJapanDoneMarker();
+                    }
+                    _baseHadFailure = false;
+                }
                 UpdateStatus();
             }
         }
@@ -172,7 +264,9 @@ public static class TilePrefetcher
 
     static void UpdateStatus()
     {
-        StatusText = _total > 0 ? $"地図を保存中 {_done}/{_total}" : "";
+        StatusText = _total <= 0 ? ""
+            : _baseRemaining > 0 ? $"日本地図を保存中 {_done}/{_total} (Wi-Fi推奨)"
+            : $"地図を保存中 {_done}/{_total}";
         ProgressChanged?.Invoke();
     }
 }
