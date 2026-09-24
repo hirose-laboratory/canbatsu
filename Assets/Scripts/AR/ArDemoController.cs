@@ -32,6 +32,8 @@ public class ArDemoController : MonoBehaviour
     MlTreeTracker _mlTracker; // ML幹検出 (null = モデル無し → 従来の幾何方式のみ)
     LiveViewStreamer _liveView; // 検証・デモ用ライブ配信 (同一Wi-Fiのブラウザで視聴。視聴者ゼロなら負荷ゼロ)
     float _gazeDownTimer; // 足元 (真下) を2秒見続けると計測リセット (検証アプリと同じ操作)
+    // ラベルの視線追従: ラベルごとの定位置 (見上げると幹に沿って視線の高さまで上がり、戻すと定位置へ)
+    readonly Dictionary<TextMesh, Vector3> _labelBasePos = new Dictionary<TextMesh, Vector3>();
     int _treeCount;
     int _tooCloseCount; // 検出中の木のうち近接ペア (過密=オレンジ) の本数
     int _measureCount;  // 成功した計測の回数 (HUD表示用)
@@ -188,6 +190,7 @@ public class ArDemoController : MonoBehaviour
         _selected.Clear();
         _latestTrees.Clear();
         _restoredMarkers.Clear(); // 実体は_workRoot下なので破棄済み
+        _labelBasePos.Clear();    // ラベル視線追従の定位置テーブルも空に (破棄済みラベルの残骸を持ち越さない)
         _kakarigi.Clear();        // 実体は_workRoot下だが内部状態 (Zone等) も戻す
         _savedTrees = null;
         _anchorSet = false;
@@ -258,14 +261,24 @@ public class ArDemoController : MonoBehaviour
     {
         if (_arCamera != null)
         {
+            // 視線追従の仰角 (見上げるほど正に大きい)
+            Vector3 camPos = _arCamera.transform.position;
+            Vector3 camFwd = _arCamera.transform.forward;
+            float horiz = Mathf.Sqrt(camFwd.x * camFwd.x + camFwd.z * camFwd.z);
+            float tanPitch = horiz > 0.01f ? camFwd.y / horiz : (camFwd.y > 0 ? 100f : -100f);
+
             // マーカーのラベルは空間固定のままカメラの方を向ける (固定向きだと回り込みで鏡文字になる)
             foreach (var marker in _markers)
             {
-                if (marker.label != null) BillboardToCamera(marker.label.transform);
+                if (marker.label == null) continue;
+                FollowGaze(marker.label, camPos, tanPitch);
+                BillboardToCamera(marker.label.transform);
             }
             foreach (var marker in _restoredMarkers)
             {
-                if (marker.label != null) BillboardToCamera(marker.label.transform);
+                if (marker.label == null) continue;
+                FollowGaze(marker.label, camPos, tanPitch);
+                BillboardToCamera(marker.label.transform);
             }
             if (_kakarigi.LabelTransform != null) BillboardToCamera(_kakarigi.LabelTransform);
 
@@ -604,6 +617,7 @@ public class ArDemoController : MonoBehaviour
         label.anchor = TextAnchor.UpperCenter;
         label.color = barColor;
         label.text = $"{distMeters:F2}m";
+        _labelBasePos[label] = labelGo.transform.position; // 視線追従の定位置
 
         _markers.Add((root, label)); // ラベルのビルボードと一括破棄は既存の仕組みに乗せる
     }
@@ -623,10 +637,26 @@ public class ArDemoController : MonoBehaviour
         Debug.Log("[ArWork] 計測リセット (足元注視)");
     }
 
+    /// <summary>見上げたときラベルが幹の鉛直軸に沿って視線の高さまで上がる (最大+6m)。
+    /// 正面に戻すと定位置へ。急な動きでガクつかないよう平滑化する (検証アプリと同じ挙動)</summary>
+    void FollowGaze(TextMesh label, Vector3 camPos, float tanPitch)
+    {
+        if (!_labelBasePos.TryGetValue(label, out var basePos)) return;
+        float dx = basePos.x - camPos.x, dz = basePos.z - camPos.z;
+        float dh = Mathf.Sqrt(dx * dx + dz * dz);
+        float targetY = Mathf.Clamp(camPos.y + tanPitch * dh, basePos.y, basePos.y + 6f);
+        var pos = label.transform.position;
+        pos.x = basePos.x;
+        pos.z = basePos.z;
+        pos.y = Mathf.Lerp(pos.y, targetY, 0.25f);
+        label.transform.position = pos;
+    }
+
     void ClearMarkers()
     {
         foreach (var marker in _markers)
         {
+            if (marker.label != null) _labelBasePos.Remove(marker.label);
             if (marker.root != null) Destroy(marker.root);
         }
         _markers.Clear();
@@ -668,6 +698,7 @@ public class ArDemoController : MonoBehaviour
         label.anchor = TextAnchor.LowerCenter;
         label.color = color;
         label.text = text;
+        _labelBasePos[label] = labelGo.transform.position; // 視線追従の定位置
 
         return (root, label);
     }
@@ -1025,6 +1056,7 @@ public class ArDemoController : MonoBehaviour
     {
         foreach (var marker in _restoredMarkers)
         {
+            if (marker.label != null) _labelBasePos.Remove(marker.label);
             if (marker.root != null) Destroy(marker.root);
         }
         _restoredMarkers.Clear();
