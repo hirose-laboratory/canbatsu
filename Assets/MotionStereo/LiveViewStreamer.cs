@@ -305,6 +305,7 @@ namespace CanbatsuMS
             }
             _rtCam.transform.position = head.position + head.rotation * camOffset.position;
             _rtCam.transform.rotation = head.rotation * camOffset.rotation;
+            _rtCam.cullingMask = cam.cullingMask; // ARカメラと同じものだけ描く (スマホUI等の映り込み防止)
             // VR有効時は fieldOfView 代入が拒否されるため、投影行列を直接設定する
             float fov = 2f * Mathf.Atan2(h * 0.5f, fy) * Mathf.Rad2Deg;
             float aspect = (w * fy) / (h * fx);

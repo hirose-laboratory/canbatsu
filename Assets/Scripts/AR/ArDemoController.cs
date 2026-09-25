@@ -434,7 +434,7 @@ public class ArDemoController : MonoBehaviour
         // 装着者視点 (実景+マーカー合成) を視聴できる。URLは作業中ページの診断行に表示
         _liveView = _workRoot.AddComponent<LiveViewStreamer>();
         _liveView.sourceCamera = _arCamera;
-        _liveView.hideDuringRender = _hudRoot != null ? _hudRoot.transform : null;
+        _liveView.hideDuringRender = null; // HUD (「移動中」等の案内板) も配信に映す (隠したくなったら _hudRoot.transform を渡す)
     }
 
     /// <summary>ML推論の初回はGPUシェーダー準備で4〜8秒かかるため、起動直後に空推論で温めておく</summary>
