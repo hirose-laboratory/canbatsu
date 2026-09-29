@@ -16,4 +16,4 @@ CAN伐は、スマート林業を支援します。
    XREAL SDK 3.1.0 (com.xreal.xr) をダウンロード
 2. 展開して `Packages/com.xreal.xr` に配置
 3. 同梱の AAR ファイル間でパッケージ名 `nrsdk.pack` が重複しており Gradle ビルドが失敗するため、
-   各 AAR の名前空間を個別の名前に変更する (手順: docs/XREAL_SDK_setup.md)
+   各 AAR の名前空間を個別の名前に変更する 
