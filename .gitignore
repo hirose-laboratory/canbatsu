@@ -113,9 +113,11 @@ InitTestScene*.unity*
 /[Aa]ssets/Firebase/Plugins/x86_64/*.so.meta
 
 
+# ドキュメント(MD)はリポジトリに含めない。実体は D:\kaihatu\GitHub\docsmd
 /docs/
 /CLAUDE.md
 /Assets/MotionStereo/*.md
 /Assets/MotionStereo/*.md.meta
 
-echo "/Packages/com.xreal.xr/" >> .gitignore
+# XREAL SDKは再配布できないためリポジトリに含めない (各自入手して Packages/com.xreal.xr に置く)
+/Packages/com.xreal.xr/
