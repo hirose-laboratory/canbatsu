@@ -112,8 +112,10 @@ InitTestScene*.unity*
 /[Aa]ssets/Firebase/Plugins/x86_64/*.so
 /[Aa]ssets/Firebase/Plugins/x86_64/*.so.meta
 
-# ƒhƒLƒ…ƒƒ“ƒg(MD)‚ÍƒŠƒ|ƒWƒgƒŠ‚ÉŠÜ‚ß‚È‚¢BŽÀ‘Ì‚Í D:\kaihatu\GitHub\docsmd
+# ï¿½hï¿½Lï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½g(MD)ï¿½Íƒï¿½ï¿½|ï¿½Wï¿½gï¿½ï¿½ï¿½ÉŠÜ‚ß‚È‚ï¿½ï¿½Bï¿½ï¿½ï¿½Ì‚ï¿½ D:\kaihatu\GitHub\docsmd
 /docs/
 /CLAUDE.md
 /Assets/MotionStereo/*.md
 /Assets/MotionStereo/*.md.meta
+
+echo "/Packages/com.xreal.xr/" >> .gitignore
