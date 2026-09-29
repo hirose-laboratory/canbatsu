@@ -112,7 +112,7 @@ InitTestScene*.unity*
 /[Aa]ssets/Firebase/Plugins/x86_64/*.so
 /[Aa]ssets/Firebase/Plugins/x86_64/*.so.meta
 
-# �h�L�������g(MD)�̓��|�W�g���Ɋ܂߂Ȃ��B���̂� D:\kaihatu\GitHub\docsmd
+
 /docs/
 /CLAUDE.md
 /Assets/MotionStereo/*.md
