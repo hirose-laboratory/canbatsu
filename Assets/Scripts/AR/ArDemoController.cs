@@ -60,6 +60,8 @@ public class ArDemoController : MonoBehaviour
 
     // かかり木の危険域表示 (試作。音声「かかりぎ」/ボタンで視界中央の木に対して起動)
     readonly KakarigiDisplay _kakarigi = new KakarigiDisplay();
+    float _lastGroundY;       // 直近の計測で推定した地面の高さ (かかり木の根元を視線から求める目安)
+    GameObject _reticle;      // かかり木スキャン中だけ出す視界中央の照準 (どこをなぞっているか分かるように)
     MsMapTransform _mapToSession; // マップ→セッション変換 (幹マップ照合が成功すると精密版に置き換わる)
 
     List<PlanTreeStore.PlanTree> _savedTrees; // この計画の保存済みマップ (読み込み完了までnull)
@@ -193,6 +195,8 @@ public class ArDemoController : MonoBehaviour
         _restoredMarkers.Clear(); // 実体は_workRoot下なので破棄済み
         _labelBasePos.Clear();    // ラベル視線追従の定位置テーブルも空に (破棄済みラベルの残骸を持ち越さない)
         _kakarigi.Clear();        // 実体は_workRoot下だが内部状態 (Zone等) も戻す
+        // 照準は作業をまたいで使い回すので隠すだけ (HUDが無いとUpdateHudPoseが隠しに来ないため)
+        if (_reticle != null) _reticle.SetActive(false);
         _savedTrees = null;
         _anchorSet = false;
         _anchorGeo = null;
@@ -253,6 +257,35 @@ public class ArDemoController : MonoBehaviour
         _hudRoot.transform.SetPositionAndRotation(
             cam.position + cam.rotation * HudOffset,
             cam.rotation);
+
+        // かかり木スキャン中だけ視界中央に照準を出す (HUDと同じく描画直前に張り付けて泳がないように)
+        bool scanning = _kakarigi.Current == KakarigiDisplay.State.Scanning;
+        if (scanning && _reticle == null) _reticle = BuildReticle();
+        if (_reticle != null)
+        {
+            _reticle.SetActive(scanning);
+            if (scanning)
+            {
+                _reticle.transform.SetPositionAndRotation(cam.position + cam.forward * 2f, cam.rotation);
+            }
+        }
+    }
+
+    /// <summary>視界中央の照準 (十字)。かかり木スキャンで視線がどこに当たっているかを示す</summary>
+    GameObject BuildReticle()
+    {
+        var go = new GameObject("Reticle");
+        go.transform.SetParent(transform, false);
+        var text = go.AddComponent<TextMesh>();
+        text.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
+        text.GetComponent<MeshRenderer>().material = text.font.material;
+        text.fontSize = 64;
+        text.characterSize = 0.01f;
+        text.anchor = TextAnchor.MiddleCenter;
+        text.alignment = TextAlignment.Center;
+        text.color = new Color(1f, 0.85f, 0.25f);
+        text.text = "＋";
+        return go;
     }
 
     // onBeforeRenderが来ない環境 (エディタの一部構成) 向けの保険
@@ -281,7 +314,12 @@ public class ArDemoController : MonoBehaviour
                 FollowGaze(marker.label, camPos, tanPitch);
                 BillboardToCamera(marker.label.transform);
             }
-            if (_kakarigi.LabelTransform != null) BillboardToCamera(_kakarigi.LabelTransform);
+            foreach (var label in _kakarigi.Labels)
+            {
+                if (label != null) BillboardToCamera(label);
+            }
+            // かかり木の全体スキャン: 視線が幹のどこを通っているかを毎フレーム追い、印を置いていく
+            if (_kakarigi.Current == KakarigiDisplay.State.Scanning) _kakarigi.UpdateScan(GazeRay());
 
             // リセットジェスチャー: 足元 (真下58度以上) を2秒見続けると計測をやり直す
             if (_workRoot != null && _motionStereo != null)
@@ -343,7 +381,10 @@ public class ArDemoController : MonoBehaviour
         }
         if (_kakarigi.Active)
         {
-            extraLines += $"\n<size=30><color=#FF8C40>かかり木: {_kakarigi.Summary}</color></size>";
+            // スキャン中は操作の案内なので大きめ・黄色、表示中は結果なのでオレンジ
+            extraLines += _kakarigi.Current == KakarigiDisplay.State.Scanning
+                ? $"\n<size=40><color=#FFD84A>【かかり木スキャン】{_kakarigi.Summary}</color></size>"
+                : $"\n<size=30><color=#FF8C40>かかり木: {_kakarigi.Summary}</color></size>";
             // 危険域の中にいるあいだは点滅の強い警告を出す
             if (_arCamera != null && _kakarigi.Contains(_arCamera.transform.position))
             {
@@ -488,6 +529,7 @@ public class ArDemoController : MonoBehaviour
         // 地面の高さは木ごとの MsTree.GroundY (局所地面、斜面対応) を使う
         var trees = TreeDetectorMS.Detect(
             _cloudPoints, kf.CamPosition.y, kf.CamPosition, out float ground, out _);
+        _lastGroundY = ground;
 
         // ML幹検出: 確定した木があれば幾何方式の結果を置き換える。
         // MLは「2回以上の計測で確認できた木」だけを返す (幽霊対策) ため、序盤1〜2回は幾何方式のまま。
@@ -828,57 +870,76 @@ public class ArDemoController : MonoBehaviour
     // ---- かかり木モード (試作) ----
 
     /// <summary>
-    /// 視界中央の木をかかり木として危険域を表示する (音声「かかりぎ」/作業ページのボタンから)。
-    /// 支持木はその最寄りの検出木を自動で使う。戻り値=起動できたか
+    /// かかり木モードを始める (音声「かかり」/作業ページのボタンから)。
+    /// 視界中央 = かかり木の根元を見ている前提で、根元に印を付けて全体スキャンに入る。
+    /// 支持木はその根元から最寄りの検出木 (立木) を自動で使う。戻り値=始められたか
     /// </summary>
     public static bool StartKakarigiAtGaze()
     {
-        if (_instance == null || _instance._workRoot == null) return false;
+        if (_instance == null || _instance._workRoot == null || _instance._arCamera == null) return false;
         return _instance.StartKakarigi();
     }
 
-    /// <summary>かかり木の危険域表示を消す (音声「かいじょ」/ボタンのトグル)</summary>
+    /// <summary>今見ている所をかかり木の先端 (支持木との接触点) として確定する (音声「てっぺん」/ボタン)</summary>
+    public static bool ConfirmKakarigiTop()
+    {
+        if (_instance == null || _instance._arCamera == null) return false;
+        bool ok = _instance._kakarigi.ConfirmTop(_instance.GazeRay(), out string message);
+        _instance.ShowFeedback(message);
+        return ok;
+    }
+
+    /// <summary>かかり木モードを終える (音声「かいじょ」/ボタン)。スキャン中でも表示中でも止められる</summary>
     public static void ClearKakarigi()
     {
         if (_instance == null) return;
         _instance._kakarigi.Clear();
-        _instance.ShowFeedback("かかり木表示を解除しました");
+        _instance.ShowFeedback("かかり木モードを終了しました");
     }
 
-    /// <summary>かかり木モードが表示中か (作業ページのボタンのトグル判定用)</summary>
+    /// <summary>かかり木モードの段階 (作業ページのボタンの文言切替用)</summary>
+    public static KakarigiDisplay.State KakarigiState =>
+        _instance != null ? _instance._kakarigi.Current : KakarigiDisplay.State.Idle;
+
+    /// <summary>かかり木モード中か (スキャン中または表示中)</summary>
     public static bool KakarigiActive => _instance != null && _instance._kakarigi.Active;
+
+    /// <summary>視界の中心を通る視線 (音声・ボタン操作はすべてこの視線で対象を決める)</summary>
+    Ray GazeRay() => new Ray(_arCamera.transform.position, _arCamera.transform.forward);
 
     bool StartKakarigi()
     {
-        var target = FindGazeTree();
-        if (target == null)
+        var gaze = GazeRay();
+
+        // 根元の目安: 視線と「直近の計測で推定した地面の高さ」の交点。その周りで地面平面を当てはめ直す
+        var roughGround = new Plane(Vector3.up, new Vector3(0f, _lastGroundY, 0f));
+        if (!roughGround.Raycast(gaze, out float t) || t <= 0f)
         {
-            ShowFeedback(_latestTrees.Count == 0
-                ? "先に計測して木を検出してください"
-                : "視線の先に木がありません (対象を画面中央に)");
+            ShowFeedback("かかり木の根元 (地面との境目) を見てください");
             return false;
         }
+        Plane ground = FitGroundPlane(gaze.GetPoint(t));
+        ground.Raycast(gaze, out float t2);
+        Vector3 roughButt = gaze.GetPoint(t2 > 0f ? t2 : t);
 
-        // 支持木 = かかり木の最寄りの検出木 (かかり木は必ず何かに掛かっているため)。6m以内に無ければ単独扱い
-        MsTree support = null;
+        // 支持木 = 根元から最寄りの検出木 (かかり木は必ず何かに掛かっているため)。
+        // 根元のすぐそば (0.6m以内) の検出はかかり木自身なので除く。6m以内に無ければ単独扱い
+        Vector3? supportBase = null;
         float bestD = 6f * 6f;
         foreach (var tree in _latestTrees)
         {
-            if (tree == target) continue;
-            float dx = tree.X - target.X, dz = tree.Z - target.Z;
+            float dx = tree.X - roughButt.x, dz = tree.Z - roughButt.z;
             float d2 = dx * dx + dz * dz;
             if (d2 > SameTreeRadius * SameTreeRadius && d2 < bestD)
             {
                 bestD = d2;
-                support = tree;
+                supportBase = tree.TrunkBase;
             }
         }
 
-        _kakarigi.Show(_workRoot.transform, target, support,
-            _arCamera.transform.position, FitGroundPlane(target.TrunkBase));
-        ShowFeedback(support != null ? "かかり木の危険域を表示 (支持木: 最寄りの木)"
-                                     : "かかり木の危険域を表示");
-        return true;
+        bool ok = _kakarigi.Begin(_workRoot.transform, gaze, ground, supportBase, out string message);
+        ShowFeedback(message);
+        return ok;
     }
 
     /// <summary>
