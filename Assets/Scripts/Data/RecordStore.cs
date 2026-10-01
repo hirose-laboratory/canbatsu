@@ -9,7 +9,6 @@ using UnityEngine;
 /// 作業記録のストア (Firestoreの work_records コレクションと同期)。
 /// 作業中ページで「作業を終了」すると計画から記録が作られてここに入る。
 /// 読み書きの方針は PlanStore と同じ (読み=メモリキャッシュ、書き=awaitせずFirestoreへ)。
-/// TODO: 伐採本数はARグラス側の自動カウントを受け取る (バックエンド待ち。今は0=未計測)
 /// </summary>
 public static class RecordStore
 {
@@ -47,7 +46,6 @@ public static class RecordStore
         var data = new Dictionary<string, object>
         {
             { "workDate", Timestamp.FromDateTime(record.Date.Date.ToUniversalTime()) },
-            { "felledCount", record.FelledCount },
             { "actualThinningRate", record.ThinningRatePercent / 100.0 }, // 0.3 = 30%
             { "areaHa", (double)record.AreaHa },
             { "areaPolygon", PlanStore.ToGeoPoints(record.RangePoints) },
@@ -93,7 +91,6 @@ public static class RecordStore
         var r = new WorkRecord { Id = d.Id };
         if (d.TryGetValue("planId", out string planId)) r.PlanId = planId;
         if (d.TryGetValue("workDate", out Timestamp ts)) r.Date = ts.ToDateTime().ToLocalTime().Date;
-        if (d.TryGetValue("felledCount", out int count)) r.FelledCount = count;
         if (d.TryGetValue("actualThinningRate", out double rate)) r.ThinningRatePercent = (int)Math.Round(rate * 100);
         if (d.TryGetValue("areaHa", out double area)) r.AreaHa = (float)area;
         if (d.TryGetValue("areaPolygon", out List<GeoPoint> polygon)) r.RangePoints = PlanStore.FromGeoPoints(polygon);

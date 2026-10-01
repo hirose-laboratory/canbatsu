@@ -7,34 +7,50 @@
         <!-- 本文 (paddingはこちらに持たせ、ダイアログの幕が画面端まで覆えるようにする) -->
         <ui:VisualElement class="working__body">
 
-            <ui:VisualElement class="working__logo" />
+            <!-- 情報部分はスクロール領域に入れる。中身 (診断テキストや概要) が画面より長くなっても
+                 下の操作ボタンを画面外へ押し出さないため (スクロールバーは出さず指のスワイプだけで送る) -->
+            <ui:ScrollView name="working-scroll" class="working__scroll"
+                           vertical-scroller-visibility="Hidden"
+                           horizontal-scroller-visibility="Hidden"
+                           touch-scroll-type="Elastic">
+                <ui:VisualElement class="working__info">
 
-            <!-- 動作中を示すパルスアイコン (Controllerがアニメーションさせる) -->
-            <ui:VisualElement class="working__pulse-area">
-                <ui:VisualElement name="pulse-ring" class="working__pulse-ring" />
-                <ui:VisualElement class="working__pulse-core" />
+                    <ui:VisualElement class="working__logo" />
+
+                    <!-- 動作中を示すパルスアイコン (Controllerがアニメーションさせる) -->
+                    <ui:VisualElement class="working__pulse-area">
+                        <ui:VisualElement name="pulse-ring" class="working__pulse-ring" />
+                        <ui:VisualElement class="working__pulse-core" />
+                    </ui:VisualElement>
+
+                    <ui:Label text="作業中" class="working__title" />
+                    <ui:Label text="ARグラスと連携して選木情報を表示しています" class="working__subtitle" />
+
+                    <!-- XREAL Eyeカメラのプレビュー (映像はEyeCameraServiceが供給。中のImageはControllerが生成) -->
+                    <ui:VisualElement name="eye-preview" class="working__eye-preview" />
+                    <ui:Label name="eye-status" text="カメラ停止中" class="working__eye-status" />
+
+                    <!-- 実施中の計画の概要 -->
+                    <ui:VisualElement name="plan-summary" class="working__card" />
+
+                    <ui:Label text="アプリを閉じずにこのままお使いください" class="working__note" />
+
+                </ui:VisualElement>
+            </ui:ScrollView>
+
+            <!-- 操作ボタンは常に画面下に固定 (スクロールしない) -->
+            <ui:VisualElement class="working__controls">
+
+                <!-- ARグラス操作の代替ボタン (音声「きじゅん」「マーク」「かかり」が使えないときの手元操作) -->
+                <ui:VisualElement class="working__ar-actions">
+                    <ui:Button name="anchor-button" text="基準点" class="working__ar-action" />
+                    <ui:Button name="mark-button" text="マーク" class="working__ar-action working__ar-action--mark" />
+                    <ui:Button name="kakarigi-button" text="かかり木" class="working__ar-action working__ar-action--kakarigi" />
+                </ui:VisualElement>
+
+                <ui:Button name="finish-button" text="作業を終了する" class="working__finish-button" />
+
             </ui:VisualElement>
-
-            <ui:Label text="作業中" class="working__title" />
-            <ui:Label text="ARグラスと連携して選木情報を表示しています" class="working__subtitle" />
-
-            <!-- XREAL Eyeカメラのプレビュー (映像はEyeCameraServiceが供給。中のImageはControllerが生成) -->
-            <ui:VisualElement name="eye-preview" class="working__eye-preview" />
-            <ui:Label name="eye-status" text="カメラ停止中" class="working__eye-status" />
-
-            <!-- 実施中の計画の概要 -->
-            <ui:VisualElement name="plan-summary" class="working__card" />
-
-            <ui:Label text="アプリを閉じずにこのままお使いください" class="working__note" />
-
-            <!-- ARグラス操作の代替ボタン (音声「きじゅん」「マーク」「かかりぎ」が使えないときの手元操作) -->
-            <ui:VisualElement class="working__ar-actions">
-                <ui:Button name="anchor-button" text="基準点" class="working__ar-action" />
-                <ui:Button name="mark-button" text="マーク" class="working__ar-action working__ar-action--mark" />
-                <ui:Button name="kakarigi-button" text="かかり木" class="working__ar-action working__ar-action--kakarigi" />
-            </ui:VisualElement>
-
-            <ui:Button name="finish-button" text="作業を終了する" class="working__finish-button" />
 
         </ui:VisualElement>
 

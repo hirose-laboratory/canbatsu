@@ -4,13 +4,32 @@
     flex-grow: 1;
 }
 
-/* 本文 (ダイアログの幕を画面端まで広げるため、paddingと中央寄せはこちらに持たせる) */
+/* 本文 (ダイアログの幕を画面端まで広げるため、paddingはこちらに持たせる) */
 .working__body {
     flex-grow: 1;
-    align-items: center;
-    justify-content: center;
+    min-height: 0; /* 中身の高さに合わせて伸びず、余った高さだけ使う (伸びると終了ボタンが画面外に出る) */
     padding-left: 32px;
     padding-right: 32px;
+}
+
+/* 情報部分のスクロール領域。min-height:0 が無いと中身全部の高さまで伸びてスクロールにならない */
+.working__scroll {
+    flex-grow: 1;
+    min-height: 0;
+}
+
+.working__info {
+    align-items: center;
+    padding-top: 16px;
+    padding-bottom: 8px;
+}
+
+/* 操作ボタン (ARボタン + 終了)。画面下に固定し、スクロール領域に押し潰させない */
+.working__controls {
+    flex-shrink: 0;
+    align-self: stretch;
+    padding-top: 10px;
+    padding-bottom: 12px;
 }
 
 .working__logo {
@@ -79,6 +98,7 @@
     font-size: 11px;
     color: rgb(130, 130, 130);
     margin-top: 4px;
+    white-space: normal; /* 診断行が長いときは横に広げず折り返す */
     -unity-text-align: middle-center;
 }
 

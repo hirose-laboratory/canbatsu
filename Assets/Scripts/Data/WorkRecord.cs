@@ -16,9 +16,6 @@ public class WorkRecord
     /// <summary>作業した日</summary>
     public DateTime Date;
 
-    /// <summary>伐採した本数 (ARグラスが自動カウント)</summary>
-    public int FelledCount;
-
     /// <summary>作業した面積 (ha)</summary>
     public float AreaHa;
 

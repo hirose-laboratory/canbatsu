@@ -134,10 +134,12 @@ public class AppRouter : MonoBehaviour
             if (ContainsAny(text, "マーク", "まーく")) ArDemoController.MarkTreeAtGaze();
             else if (ContainsAny(text, "とりけし", "取り消し")) ArDemoController.UnmarkTreeAtGaze();
             else if (ContainsAny(text, "きじゅん", "基準")) ArDemoController.SetAnchorHere();
-            // かかり木モード: 根元を見て「かかり」→先端までなぞって「てっぺん」→危険域。「かいじょ」で終了
-            else if (ContainsAny(text, "かかり", "掛かり", "カカリ")) ArDemoController.StartKakarigiAtGaze();
-            else if (ContainsAny(text, "てっぺん", "テッペン", "先端", "せんたん", "頂上", "ちょうじょう"))
-                ArDemoController.ConfirmKakarigiTop();
+            // かかり木モード: 根元を見て「かかり」→支持木の根元を見て「しじ」→触れている所を見て「せってん」→危険域。
+            // 「かいじょ」でどの途中でも終了。「支持」は「指示」と聞き取られやすいので両方受ける
+            else if (ContainsAny(text, "かかり", "掛かり", "カカリ")) ArDemoController.MarkKakarigiAtGaze();
+            else if (ContainsAny(text, "せってん", "接点", "セッテン", "てっぺん", "テッペン", "先端", "せんたん"))
+                ArDemoController.MarkContactAtGaze();
+            else if (ContainsAny(text, "しじ", "支持", "指示", "シジ")) ArDemoController.MarkSupportAtGaze();
             else if (ContainsAny(text, "かいじょ", "解除", "カイジョ")) ArDemoController.ClearKakarigi();
             return;
         }

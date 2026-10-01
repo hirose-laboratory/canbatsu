@@ -37,6 +37,8 @@ public static class TilePrefetcher
     static int _done;
     static int _baseRemaining; // 日本全域ベースの残り枚数 (0になったら完了マーカーを書く)
     static bool _baseHadFailure; // ベース保存で失敗タイルがあったか (あれば完了扱いにせず次回再開)
+    static bool _baseDone;       // ベース保存が完了済みと確認できた (以後は何もしない)
+    static bool _baseScanning;   // 未保存タイルの洗い出し中
     static bool _running;
 
     // ---- 日本全域のベース地図 (山奥のオフラインでも地図が開けるように) ----
@@ -61,29 +63,64 @@ public static class TilePrefetcher
     public static void PrefetchJapanBase(MonoBehaviour runner)
     {
         if (runner == null) return;
-        if (File.Exists(JapanDoneMarker)) return;
-        if (_baseRemaining > 0) return; // すでに積んである
+        if (_baseDone || _baseScanning || _baseRemaining > 0) return; // 完了済み / 調査中 / すでに積んである
+        if (File.Exists(JapanDoneMarker))
+        {
+            _baseDone = true; // 以後はファイルの確認もしない
+            return;
+        }
         // 全国分は量があるのでWi-Fiのときだけ (計画範囲の先読みは従来どおり回線を問わない)
         if (Application.internetReachability != NetworkReachability.ReachableViaLocalAreaNetwork) return;
 
-        int added = 0;
-        for (int z = JapanMinZoom; z <= JapanMaxZoom; z++)
+        runner.StartCoroutine(ScanJapanBase(runner));
+    }
+
+    /// <summary>
+    /// 未保存のベースタイルを洗い出して行列に積む。約8,000枚ぶんのファイル確認になるので、
+    /// 予定ページを開くたびに一気にやると画面が一瞬止まる。数フレームに分けて行う
+    /// </summary>
+    static IEnumerator ScanJapanBase(MonoBehaviour runner)
+    {
+        _baseScanning = true;
+        var missing = new List<(string url, string path)>();
+        try
         {
-            foreach (var tile in CollectZoomTiles(z, JapanMinLat, JapanMaxLat, JapanMinLng, JapanMaxLng))
+            int checkedCount = 0;
+            for (int z = JapanMinZoom; z <= JapanMaxZoom; z++)
             {
-                if (!tile.url.Contains("/std/")) continue; // ベースは標準地図のみ (既定レイヤー)
-                if (File.Exists(tile.path)) continue;
-                _queue.Enqueue((tile.url, tile.path, true));
-                added++;
+                int n = 1 << z;
+                int x0 = Mathf.Clamp((int)Math.Floor((JapanMinLng + 180.0) / 360.0 * n), 0, n - 1);
+                int x1 = Mathf.Clamp((int)Math.Floor((JapanMaxLng + 180.0) / 360.0 * n), 0, n - 1);
+                int y0 = Mathf.Clamp((int)Math.Floor(LatToTileY(JapanMaxLat, z)), 0, n - 1);
+                int y1 = Mathf.Clamp((int)Math.Floor(LatToTileY(JapanMinLat, z)), 0, n - 1);
+                for (int y = y0; y <= y1; y++)
+                {
+                    for (int x = x0; x <= x1; x++)
+                    {
+                        // ベースは標準地図のみ (既定レイヤー)
+                        string path = MapView.TileCachePath(MapView.BaseLayer.Standard, z, x, y);
+                        if (!File.Exists(path))
+                        {
+                            missing.Add((MapView.TileUrl(MapView.BaseLayer.Standard, z, x, y), path));
+                        }
+                        if (++checkedCount % 400 == 0) yield return null;
+                    }
+                }
             }
         }
-        if (added == 0)
+        finally
+        {
+            _baseScanning = false;
+        }
+
+        if (missing.Count == 0)
         {
             WriteJapanDoneMarker(); // 全部保存済みだった
-            return;
+            yield break;
         }
-        _baseRemaining = added;
-        _total += added;
+        foreach (var tile in missing) _queue.Enqueue((tile.url, tile.path, true));
+        _baseRemaining = missing.Count;
+        _total += missing.Count;
         if (_running) UpdateStatus();
         else runner.StartCoroutine(DownloadLoop());
     }
@@ -94,6 +131,7 @@ public static class TilePrefetcher
         {
             Directory.CreateDirectory(Path.GetDirectoryName(JapanDoneMarker));
             File.WriteAllText(JapanDoneMarker, DateTime.Now.ToString("yyyy-MM-dd HH:mm"));
+            _baseDone = true;
             Debug.Log("[TilePrefetcher] 日本全域ベース地図の保存が完了");
         }
         catch (Exception e)
@@ -215,6 +253,7 @@ public static class TilePrefetcher
                 var (url, path, isBase) = _queue.Dequeue();
                 using (var request = UnityWebRequest.Get(url))
                 {
+                    request.timeout = 20; // 固まった通信で行列全体が止まらないよう打ち切る
                     yield return request.SendWebRequest();
                     if (request.result == UnityWebRequest.Result.Success)
                     {

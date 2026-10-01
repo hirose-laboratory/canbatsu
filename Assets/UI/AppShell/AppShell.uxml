@@ -34,7 +34,8 @@
             </ui:VisualElement>
         </ui:VisualElement>
 
-        <!-- 音声コマンドの認識結果などを一時表示するトースト -->
-        <ui:Label name="voice-toast" text="" class="app-shell__voice-toast" />
+        <!-- 音声コマンドの認識結果などを一時表示するトースト。
+             画面下のボタン (作業終了など) に重なってもタップを奪わないよう picking-mode は Ignore -->
+        <ui:Label name="voice-toast" text="" class="app-shell__voice-toast" picking-mode="Ignore" />
     </ui:VisualElement>
 </ui:UXML>

@@ -44,11 +44,14 @@ public static class PlanStore
         // ドキュメントIDはFirestoreの自動生成を使う (圏外でもIDは即時発行される)
         var doc = FirebaseService.Db.Collection(Collection).Document();
         plan.Id = doc.Id;
-        _plans.Add(plan);
 
+        // 送るデータを先に組み立てる。ここで失敗したら一覧 (メモリ) にも入れない
+        // (先に一覧へ入れると「画面には出るのに保存されていない計画」が残るため)
         var data = ToData(plan);
         data["createdBy"] = FirebaseService.Uid;
         data["createdAt"] = FieldValue.ServerTimestamp;
+
+        _plans.Add(plan);
         doc.SetAsync(data); // 圏外対策: awaitしない
     }
 
@@ -133,9 +136,18 @@ public static class PlanStore
         if (points == null) return list;
         foreach (var p in points)
         {
+            // GeoPointは範囲外やNaNの座標で例外を投げ、保存処理ごと止めてしまう。壊れた点は捨てる
+            if (!IsValidLonLat(p)) continue;
             list.Add(new GeoPoint(p.y, p.x));
         }
         return list;
+    }
+
+    /// <summary>緯度経度として正しい値か (x=経度, y=緯度)</summary>
+    internal static bool IsValidLonLat(Vector2 p)
+    {
+        return !float.IsNaN(p.x) && !float.IsNaN(p.y)
+            && p.x >= -180f && p.x <= 180f && p.y >= -90f && p.y <= 90f;
     }
 
     /// <summary>GeoPoint(緯度, 経度) → Vector2(x=経度, y=緯度)</summary>

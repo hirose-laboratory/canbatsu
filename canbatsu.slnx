@@ -5,4 +5,5 @@
   <Project Path="HangUpTree.Core.csproj" />
   <Project Path="Unity.XR.XREAL.Editor.csproj" />
   <Project Path="CanbatsuMS.csproj" />
+  <Project Path="Assembly-CSharp-Editor.csproj" />
 </Solution>

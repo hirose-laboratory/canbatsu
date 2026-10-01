@@ -91,25 +91,29 @@ public class WorkingPageController
         // ARグラス操作の代替ボタン (音声「きじゅん」「マーク」「かかりぎ」が使えないときの手元操作。結果はグラスのHUDに出る)
         page.Q<Button>("anchor-button").clicked += () => ArDemoController.SetAnchorHere();
         page.Q<Button>("mark-button").clicked += () => ArDemoController.MarkTreeAtGaze();
-        // かかり木は段階に合わせて1つのボタンで進める:
-        //   未使用「かかり木」(根元をマーク) → スキャン中「先端OK」(接触点を確定) → 表示中「かかり木解除」
-        // スキャン中にやめたいときは音声「かいじょ」
+        // かかり木は段階に合わせて1つのボタンで進める (3点を順にマーク):
+        //   「かかり木」(根元) → 「支持木」(相手の木の根元) → 「接点」(触れている所→計算) → 「かかり木解除」
+        // 途中でやめたいときは音声「かいじょ」
         var kakarigiButton = page.Q<Button>("kakarigi-button");
         kakarigiButton.clicked += () =>
         {
             switch (ArDemoController.KakarigiState)
             {
-                case KakarigiDisplay.State.Idle: ArDemoController.StartKakarigiAtGaze(); break;
-                case KakarigiDisplay.State.Scanning: ArDemoController.ConfirmKakarigiTop(); break;
+                case KakarigiDisplay.State.Idle: ArDemoController.MarkKakarigiAtGaze(); break;
+                case KakarigiDisplay.State.TargetMarked: ArDemoController.MarkSupportAtGaze(); break;
+                case KakarigiDisplay.State.SupportMarked: ArDemoController.MarkContactAtGaze(); break;
                 default: ArDemoController.ClearKakarigi(); break;
             }
         };
         page.schedule.Execute(() =>
         {
-            var state = ArDemoController.KakarigiState;
-            kakarigiButton.text = state == KakarigiDisplay.State.Idle ? "かかり木"
-                : state == KakarigiDisplay.State.Scanning ? "先端OK"
-                : "かかり木解除";
+            switch (ArDemoController.KakarigiState)
+            {
+                case KakarigiDisplay.State.Idle: kakarigiButton.text = "かかり木"; break;
+                case KakarigiDisplay.State.TargetMarked: kakarigiButton.text = "支持木"; break;
+                case KakarigiDisplay.State.SupportMarked: kakarigiButton.text = "接点"; break;
+                default: kakarigiButton.text = "かかり木解除"; break;
+            }
         }).Every(300);
 
         // 誤タップ防止のためダイアログを挟む (記録して続ける / 記録して完了 / キャンセルの3択)
@@ -154,7 +158,6 @@ public class WorkingPageController
         {
             PlanId = _plan.Id,
             Date = DateTime.Today,
-            FelledCount = 0, // TODO: ARグラスの自動カウントを受け取る (バックエンド待ち)
             AreaHa = _plan.AreaHa,
             ThinningRatePercent = _plan.ThinningRatePercent,
             RangePoints = new List<Vector2>(_plan.RangePoints ?? new List<Vector2>()),

@@ -3,24 +3,21 @@ using HangUpTree.Core;
 using UnityEngine;
 
 /// <summary>
-/// かかり木の危険予知 (試作)。3段階で進む:
-///  1. 対象マーク: かかり木の根元 (元口) を見て開始 → 根元に印、最寄りの立木を支持木として印
-///  2. 全体スキャン: 根元から支持木に引っかかっている先端まで視線でなぞる → なぞった所に印が付いていく。
-///     先端で確定すると接触点を3Dで求める
-///  3. 危険域表示: 実測した幹 (根元→接触点) から倒れる向き・樹高を出して危険域を描く
+/// かかり木の危険予知 (試作)。3点を順にマークして危険域を出す:
+///  1. かかり木: 根元 (元口) を見て「かかり木」 → 根元に印
+///  2. 支持木: 寄りかかっている相手の木の根元を見て「支持木」 → 根元に印 (近くに検出木があれば呼び出し側で吸着)
+///  3. 接点: かかり木が支持木に触れている所を見て「接点」 → 接点を3Dで求めて危険域を描く
 ///
 /// 計算はAR担当の最新版 (HangUpTree 0831) の Core をそのまま使う (Assets/HangUpTreeCore):
-///  - 接触点は「先端への視線」と「支持木の鉛直な幹軸」の最近接点 (手法A)。
-///    1m以上動いてもう一度先端を確定すると2視点の三角測量 (手法B) に格上げ。どちらも無理なら高さ仮定 (手法C)
-///  - 樹高 = 見えている長さ×1.3 (接触点より先は見えないので外挿)。ただし林分の代表樹高 (20m) を下限にする
+///  - 接点は「接点への視線」と「支持木の鉛直な幹軸」の最近接点 (手法A)。
+///    1m以上動いてもう一度「接点」すると2視点の三角測量 (手法B) に格上げ。どちらも無理なら高さ仮定 (手法C)
+///  - 樹高 = 見えている長さ×1.3 (接点より先は見えないので外挿)。ただし林分の代表樹高 (20m) を下限にする
 ///    (Coreの安全側の設計。低く見積もって危険域を狭めることはしない)
-/// スキャン中の印の3D位置: かかり木は支持木に寄りかかっているので、幹は「根元と支持木を通る鉛直な面」の中にある。
-/// 視線とこの面の交点をなぞった位置とする。
 /// 描画は実機で実証済みのプリミティブ (Cube/Sphere + Resources/AR/ArUnlit) だけで行う。
 /// </summary>
 public class KakarigiDisplay
 {
-    public enum State { Idle, Scanning, Shown }
+    public enum State { Idle, TargetMarked, SupportMarked, Shown }
 
     /// <summary>危険域のパラメータ (0831版の既定値のまま = すべて暫定値)</summary>
     readonly DangerZoneSettings _settings = new DangerZoneSettings();
@@ -32,52 +29,48 @@ public class KakarigiDisplay
     /// <summary>ビルボードさせるラベル (ArDemoController側で毎フレームカメラに向ける)</summary>
     public IReadOnlyList<Transform> Labels => _labels;
 
-    /// <summary>HUD用の説明 (状態ごとに変わる)</summary>
+    /// <summary>HUD用: 手順中は次の操作の案内、表示中は結果の要約</summary>
     public string Summary { get; private set; } = "";
+
+    public const string NavSupport = "支持木 (寄りかかっている相手の木) の根元を見て「支持木」";
+    public const string NavContact = "かかり木が支持木に触れている所を見て「接点」";
 
     // ---- 観測 ----
     Vector3 _butt;               // かかり木の根元 (地面上)
-    Vector3? _supportBase;       // 支持木の根元 (無ければnull=単独扱い)
+    Vector3 _supportBase;        // 支持木の根元 (地面上)
     Plane _ground;
     GroundFrame _frame;
-    Plane _scanPlane;            // なぞり位置を求める鉛直面 (根元と支持木を通る)
-    Ray? _firstTopRay;           // 1回目に確定した先端への視線 (2視点の三角測量用)
-    float _scannedLength;        // なぞった最遠点の根元からの距離 [m] (HUD表示用)
-    Vector3 _lastDot;
-    bool _hasDot;
+    Ray? _firstContactRay;       // 1回目に確定した接点への視線 (2視点の三角測量用)
 
     // ---- 表示 ----
     GameObject _root;            // この機能の表示すべての親 (解除で一括破棄)
-    GameObject _scanRoot;        // スキャン中だけの表示 (印とカーソル)
-    GameObject _zoneRoot;        // 危険域の表示 (確定し直すたびに作り直す)
-    Transform _cursor;           // 今なぞっている位置のカーソル
+    GameObject _supportRoot;     // 支持木の印 (置き直しで作り直す)
+    GameObject _zoneRoot;        // 接点と危険域 (確定し直すたびに作り直す)
     readonly List<Transform> _labels = new List<Transform>();
-    Material _dotMaterial;
 
-    const int MaxDots = 80;           // 印の最大数 (描画負荷の上限)
-    const float DotSpacing = 0.4f;    // この間隔以上なぞり位置が動いたら印を置く [m]
-    const float MaxScanHeight = 35f;  // これより高い交点は空を見ている扱いで無視
+    const float MaxMarkDistance = 20f;     // これより遠い根元は誤操作扱い
+    const float MinSupportDistance = 0.5f; // かかり木と支持木の根元がこれより近ければ同じ木
+    const float MaxSupportDistance = 15f;
 
-    static readonly Color TargetColor = new Color(1f, 0.35f, 0.2f);   // かかり木の印
-    static readonly Color SupportColor = new Color(0.3f, 0.75f, 0.95f); // 支持木の印
-    static readonly Color ScanColor = new Color(1f, 0.85f, 0.25f);   // なぞった所の印
+    static readonly Color TargetColor = new Color(1f, 0.35f, 0.2f);    // かかり木
+    static readonly Color SupportColor = new Color(0.3f, 0.75f, 0.95f); // 支持木
+    static readonly Color ContactColor = new Color(1f, 0.85f, 0.25f);   // 接点
 
     // ======================================================================
-    // 1. 対象マーク
+    // 1. かかり木
     // ======================================================================
 
     /// <summary>
-    /// かかり木の根元を見ている視線からスキャンを始める。戻り値=開始できたか (失敗理由はmessage)。
+    /// かかり木の根元を見ている視線からマークを始める。戻り値=マークできたか (結果の文言はmessage)。
     /// </summary>
     /// <param name="parent">表示の親 (WorkContent。作業終了で一括破棄される)</param>
     /// <param name="gaze">根元を見ている視線 (カメラ位置+向き)</param>
     /// <param name="ground">根元まわりの地面平面</param>
-    /// <param name="supportBase">支持木の根元 (最寄りの立木。無ければnull)</param>
-    public bool Begin(Transform parent, Ray gaze, Plane ground, Vector3? supportBase, out string message)
+    public bool MarkTarget(Transform parent, Ray gaze, Plane ground, out string message)
     {
         Clear();
         if (!HangUpSolver.TryResolveOnGround(gaze, ground, out Vector3 butt)
-            || Vector3.Distance(gaze.origin, butt) > 20f)
+            || Vector3.Distance(gaze.origin, butt) > MaxMarkDistance)
         {
             message = "かかり木の根元 (地面との境目) を見てください";
             return false;
@@ -86,99 +79,83 @@ public class KakarigiDisplay
         _butt = butt;
         _ground = ground;
         _frame = GroundFrame.FromPlane(ground, butt);
-        _supportBase = supportBase;
-
-        // なぞり位置を求める鉛直面: 根元と支持木を通る面 (支持木が無ければ自分に正対する面)
-        Vector3 along = supportBase.HasValue ? supportBase.Value - butt : butt - gaze.origin;
-        along.y = 0f;
-        if (along.sqrMagnitude < 1e-4f) along = Vector3.forward;
-        Vector3 normal = Vector3.Cross(along.normalized, Vector3.up);
-        _scanPlane = new Plane(normal, butt);
 
         _root = new GameObject("Kakarigi");
         _root.transform.SetParent(parent, false);
-        _scanRoot = new GameObject("KakarigiScan");
-        _scanRoot.transform.SetParent(_root.transform, false);
-        _dotMaterial = ArDemoController.MakeUnlit(ScanColor);
+        AddPillar(_root.transform, butt, TargetColor, 0.5f, "かかり木");
 
-        // 根元の印 (かかり木) と支持木の印
-        AddPillar(butt, TargetColor, 0.5f, "かかり木");
-        if (supportBase.HasValue) AddPillar(supportBase.Value, SupportColor, 2.5f, "支持木");
+        Current = State.TargetMarked;
+        Summary = NavSupport;
+        message = "かかり木をマークしました";
+        return true;
+    }
 
-        _cursor = AddSphere(_scanRoot.transform, butt, 0.35f, TargetColor).transform;
+    /// <summary>視線と地面 (かかり木の根元まわりの平面) の交点。支持木の根元候補を求めるのに使う</summary>
+    public bool TryGroundPoint(Ray gaze, out Vector3 point)
+    {
+        point = default;
+        return Current != State.Idle
+            && HangUpSolver.TryResolveOnGround(gaze, _ground, out point)
+            && Vector3.Distance(gaze.origin, point) <= MaxMarkDistance;
+    }
 
-        _firstTopRay = null;
-        _scannedLength = 0f;
-        _hasDot = false;
-        Current = State.Scanning;
-        Summary = supportBase.HasValue
-            ? "根元から引っかかっている先端まで視線でなぞり、先端で「てっぺん」"
-            : "根元から先端まで視線でなぞり、先端で「てっぺん」 (支持木が見つからないので概算)";
-        message = supportBase.HasValue ? "かかり木をマーク。先端までなぞってください"
-                                       : "かかり木をマーク (支持木なし)。先端までなぞってください";
+    // ======================================================================
+    // 2. 支持木
+    // ======================================================================
+
+    /// <summary>支持木の根元をマークする。表示中に呼べば置き直し (接点と危険域は消える)</summary>
+    public bool MarkSupport(Vector3 supportBase, out string message)
+    {
+        if (Current == State.Idle)
+        {
+            message = "先に「かかり木」で根元をマークしてください";
+            return false;
+        }
+        Vector3 flat = supportBase - _butt;
+        flat.y = 0f;
+        float d = flat.magnitude;
+        if (d < MinSupportDistance)
+        {
+            message = "かかり木と同じ所です。寄りかかっている相手の木の根元を見てください";
+            return false;
+        }
+        if (d > MaxSupportDistance)
+        {
+            message = $"支持木が遠すぎます ({d:0}m)。寄りかかっている相手の木の根元を見てください";
+            return false;
+        }
+
+        DestroyGroup(ref _zoneRoot);
+        DestroyGroup(ref _supportRoot);
+        Zone = null;
+        _firstContactRay = null;
+
+        _supportBase = supportBase;
+        _supportRoot = new GameObject("KakarigiSupport");
+        _supportRoot.transform.SetParent(_root.transform, false);
+        AddPillar(_supportRoot.transform, supportBase, SupportColor, 2.5f, "支持木");
+
+        Current = State.SupportMarked;
+        Summary = NavContact;
+        message = $"支持木をマークしました (かかり木から{d:0.0}m)";
         return true;
     }
 
     // ======================================================================
-    // 2. 全体スキャン (毎フレーム)
-    // ======================================================================
-
-    /// <summary>今の視線でなぞり位置を更新する。一定間隔ごとに印を置いていく</summary>
-    public void UpdateScan(Ray gaze)
-    {
-        if (Current != State.Scanning || _cursor == null) return;
-        if (!TryScanPoint(gaze, out Vector3 p))
-        {
-            _cursor.gameObject.SetActive(false); // 木の外 (空・遠く) を見ている
-            return;
-        }
-        _cursor.gameObject.SetActive(true);
-        _cursor.position = p;
-
-        if (!_hasDot || (p - _lastDot).sqrMagnitude > DotSpacing * DotSpacing)
-        {
-            if (_scanRoot.transform.childCount < MaxDots)
-            {
-                AddSphere(_scanRoot.transform, p, 0.18f, ScanColor, _dotMaterial);
-            }
-            _lastDot = p;
-            _hasDot = true;
-            _scannedLength = Mathf.Max(_scannedLength, Vector3.Distance(_butt, p));
-            Summary = $"スキャン中: {_scannedLength:0.0}m まで。先端で「てっぺん」";
-        }
-    }
-
-    /// <summary>視線と鉛直面の交点 = なぞっている幹上の位置。空や遠すぎる所はfalse</summary>
-    bool TryScanPoint(Ray gaze, out Vector3 p)
-    {
-        p = default;
-        if (!_scanPlane.Raycast(gaze, out float t) || t <= 0f || t > 40f) return false;
-        p = gaze.GetPoint(t);
-        float height = _frame.HeightOf(p);
-        if (height < -0.5f || height > MaxScanHeight) return false;
-        // 根元から水平に離れすぎた所 (支持木の向こう側など) は幹ではない
-        Vector3 flat = p - _butt;
-        flat.y = 0f;
-        float limit = _supportBase.HasValue
-            ? Vector3.Distance(new Vector3(_supportBase.Value.x, 0f, _supportBase.Value.z),
-                               new Vector3(_butt.x, 0f, _butt.z)) + 3f
-            : 25f;
-        return flat.magnitude <= limit;
-    }
-
-    // ======================================================================
-    // 3. 先端を確定して危険域を表示
+    // 3. 接点 → 危険域
     // ======================================================================
 
     /// <summary>
-    /// 今の視線を先端 (支持木との接触点) として確定し、危険域を出す。
+    /// 今の視線を接点 (かかり木が支持木に触れている所) として確定し、危険域を出す。
     /// 2回目以降の確定で1回目から1m以上離れていれば、2視点の三角測量で精度を上げる。
     /// </summary>
-    public bool ConfirmTop(Ray gaze, out string message)
+    public bool MarkContact(Ray gaze, out string message)
     {
-        if (Current == State.Idle)
+        if (Current == State.Idle || Current == State.TargetMarked)
         {
-            message = "先に「かかり」でかかり木をマークしてください";
+            message = Current == State.Idle
+                ? "先に「かかり木」で根元をマークしてください"
+                : "先に「支持木」の根元をマークしてください";
             return false;
         }
 
@@ -187,22 +164,22 @@ public class KakarigiDisplay
         float confidence;
 
         // 手法B: 2視点の三角測量 (1回目の確定から十分に動いたとき)
-        if (_firstTopRay.HasValue && HangUpSolver.TryResolveTopByTriangulation(
-                _firstTopRay.Value, gaze, _settings.MaxReprojectionGap, _settings.MinTriangulationBaseline,
+        if (_firstContactRay.HasValue && HangUpSolver.TryResolveTopByTriangulation(
+                _firstContactRay.Value, gaze, _settings.MaxReprojectionGap, _settings.MinTriangulationBaseline,
                 out top, out float triGap))
         {
             method = TopResolveMethod.Triangulation;
             confidence = 0.9f * Mathf.Clamp01(1f - triGap / _settings.MaxReprojectionGap);
         }
         // 手法A: 支持木の鉛直な幹軸との最近接点
-        else if (_supportBase.HasValue && HangUpSolver.TryResolveTopBySupportAxis(
-                     gaze, new Line3(_supportBase.Value, Vector3.up), _settings.MaxReprojectionGap,
+        else if (HangUpSolver.TryResolveTopBySupportAxis(
+                     gaze, new Line3(_supportBase, Vector3.up), _settings.MaxReprojectionGap,
                      out top, out float axGap))
         {
             method = TopResolveMethod.SupportAxis;
             confidence = 0.75f * Mathf.Clamp01(1f - axGap / _settings.MaxReprojectionGap);
         }
-        // 手法C: 接触点の高さを仮定 (支持木が無い/視線が支持木から外れているとき)
+        // 手法C: 接点の高さを仮定 (視線が支持木の幹から大きく外れているとき)
         else if (HangUpSolver.TryResolveTopByAssumedHeight(gaze, _ground, _settings.AssumedContactHeight, out top))
         {
             method = TopResolveMethod.AssumedHeight;
@@ -210,33 +187,31 @@ public class KakarigiDisplay
         }
         else
         {
-            message = "先端を求められませんでした。引っかかっている所を見てもう一度";
+            message = "接点を求められませんでした。触れている所を見てもう一度";
             return false;
         }
 
         if (_frame.HeightOf(top) < 1f)
         {
-            message = "先端が低すぎます。引っかかっている所 (上の方) を見てもう一度";
+            message = "接点が低すぎます。触れている所 (上の方) を見てもう一度";
             return false;
         }
 
-        if (!_firstTopRay.HasValue) _firstTopRay = gaze;
+        if (!_firstContactRay.HasValue) _firstContactRay = gaze;
 
-        // 接触点の真下 (重力方向) の地面の点。支持木があればその根元と一致する
-        Vector3 belowTop = HangUpSolver.TryResolveOnGround(new Ray(top, Vector3.down), _ground, out var hit)
-            ? hit : top - Vector3.up * _frame.HeightOf(top);
-        Vector3 supportBase = _supportBase ?? belowTop;
-        var composed = HangUpSolver.Compose(_butt, top, supportBase, _frame, _ground, _settings,
+        var composed = HangUpSolver.Compose(_butt, top, _supportBase, _frame, _ground, _settings,
             method, confidence);
         if (!composed.IsValid)
         {
-            message = "幹の向きを決められませんでした。先端を見てもう一度";
+            message = "幹の向きを決められませんでした。接点を見てもう一度";
             return false;
         }
 
         // 倒れる向きの補正: Coreは幹の線を斜面に垂直に投影した向きを使うが、木は重力で倒れるので
-        // 実際の向きは「幹を含む鉛直な面と斜面の交線」= 根元→接触点の真下の地面、になる。
+        // 実際の向きは「幹を含む鉛直な面と斜面の交線」= 根元→接点の真下の地面、になる。
         // 平地では両者は一致し、斜面では幹の高さのぶん山側にずれる (20°の斜面で約24°) ため補正する
+        Vector3 belowTop = HangUpSolver.TryResolveOnGround(new Ray(top, Vector3.down), _ground, out var hit)
+            ? hit : top - Vector3.up * _frame.HeightOf(top);
         float fallAzimuth = _frame.AzimuthDeg(belowTop - _butt);
         var solution = new HangUpSolution(
             composed.Butt, composed.Top, composed.SupportBase,
@@ -245,11 +220,6 @@ public class KakarigiDisplay
 
         Zone = DangerZoneBuilder.Build(solution, _settings, _frame);
         DrawZone(solution);
-
-        // スキャン中の表示はもう不要 (実測した幹の線に置き換わる)
-        if (_scanRoot != null) Object.Destroy(_scanRoot);
-        _scanRoot = null;
-        _cursor = null;
         Current = State.Shown;
 
         string methodText = method == TopResolveMethod.Triangulation ? "2視点・精度高"
@@ -262,8 +232,8 @@ public class KakarigiDisplay
         Summary = $"幹{solution.VisibleLength:0.0}m・傾き{leanFromVertical:0}°→樹高{solution.EstimatedTreeHeight:0}m" +
                   (floored ? "(下限)" : "") + $"・半径{radius:0}m ({methodText}・暫定値)";
         message = method == TopResolveMethod.Triangulation
-            ? "2視点で先端を確定 (精度高)"
-            : "危険域を表示。1m以上横に動いて先端をもう一度「てっぺん」で精度アップ";
+            ? "2視点で接点を確定 (精度高)"
+            : "危険域を表示。1m以上横に動いて接点をもう一度「接点」で精度アップ";
         return true;
     }
 
@@ -271,11 +241,10 @@ public class KakarigiDisplay
     {
         if (_root != null) Object.Destroy(_root);
         _root = null;
-        _scanRoot = null;
+        _supportRoot = null;
         _zoneRoot = null;
-        _cursor = null;
         _labels.Clear();
-        _firstTopRay = null;
+        _firstContactRay = null;
         Zone = null;
         Summary = "";
         Current = State.Idle;
@@ -300,7 +269,7 @@ public class KakarigiDisplay
 
     void DrawZone(in HangUpSolution s)
     {
-        if (_zoneRoot != null) Object.Destroy(_zoneRoot); // 2回目の確定 (精度アップ) で描き直す
+        DestroyGroup(ref _zoneRoot); // 2回目の確定 (精度アップ) で描き直す
         _zoneRoot = new GameObject("KakarigiZone");
         _zoneRoot.transform.SetParent(_root.transform, false);
 
@@ -309,9 +278,10 @@ public class KakarigiDisplay
             DrawSector(sector);
         }
 
-        // 実測した幹 (根元→接触点) を太い線で示す
+        // 実測した幹 (根元→接点) を太い線で示し、接点に印とラベル
         AddSegment(_zoneRoot.transform, s.Butt, s.Top, ArDemoController.MakeUnlit(TargetColor), 0.14f, flat: false);
-        AddSphere(_zoneRoot.transform, s.Top, 0.3f, TargetColor);
+        AddSphere(_zoneRoot.transform, s.Top, 0.3f, ContactColor);
+        AddLabel(_zoneRoot.transform, s.Top + Vector3.up * 0.4f, ContactColor, "接点");
     }
 
     void DrawSector(in DangerSector sector)
@@ -350,14 +320,18 @@ public class KakarigiDisplay
     }
 
     /// <summary>根元に立てる印 (縦の柱+ラベル)</summary>
-    void AddPillar(Vector3 basePos, Color color, float height, string text)
+    void AddPillar(Transform parent, Vector3 basePos, Color color, float height, string text)
     {
-        var material = ArDemoController.MakeUnlit(color);
-        AddSegment(_root.transform, basePos, basePos + Vector3.up * height, material, 0.2f, flat: false);
+        AddSegment(parent, basePos, basePos + Vector3.up * height, ArDemoController.MakeUnlit(color), 0.2f,
+            flat: false);
+        AddLabel(parent, basePos + Vector3.up * (height + 0.4f), color, text);
+    }
 
+    void AddLabel(Transform parent, Vector3 pos, Color color, string text)
+    {
         var go = new GameObject("KakarigiLabel");
-        go.transform.SetParent(_root.transform, false);
-        go.transform.position = basePos + Vector3.up * (height + 0.4f);
+        go.transform.SetParent(parent, false);
+        go.transform.position = pos;
         var label = go.AddComponent<TextMesh>();
         label.font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf");
         label.GetComponent<MeshRenderer>().material = label.font.material;
@@ -368,6 +342,16 @@ public class KakarigiDisplay
         label.color = color;
         label.text = text;
         _labels.Add(go.transform);
+    }
+
+    /// <summary>表示のまとまりを消す。その下のラベルはビルボード対象からも外す</summary>
+    void DestroyGroup(ref GameObject group)
+    {
+        if (group == null) return;
+        var root = group.transform;
+        _labels.RemoveAll(t => t == null || t.IsChildOf(root));
+        Object.Destroy(group);
+        group = null;
     }
 
     /// <param name="flat">true=地面に這う平たい帯 (危険域の縁)、false=角柱 (柱・幹の線)</param>
@@ -385,7 +369,7 @@ public class KakarigiDisplay
         if (material != null) seg.GetComponent<Renderer>().material = material;
     }
 
-    static GameObject AddSphere(Transform parent, Vector3 pos, float size, Color color, Material shared = null)
+    static GameObject AddSphere(Transform parent, Vector3 pos, float size, Color color)
     {
         var s = GameObject.CreatePrimitive(PrimitiveType.Sphere);
         s.name = "Dot";
@@ -393,7 +377,7 @@ public class KakarigiDisplay
         Object.Destroy(s.GetComponent<Collider>());
         s.transform.position = pos;
         s.transform.localScale = Vector3.one * size;
-        var material = shared != null ? shared : ArDemoController.MakeUnlit(color);
+        var material = ArDemoController.MakeUnlit(color);
         if (material != null) s.GetComponent<Renderer>().material = material;
         return s;
     }

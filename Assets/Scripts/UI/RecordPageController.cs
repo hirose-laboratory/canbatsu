@@ -207,8 +207,6 @@ public class RecordPageController
                 title: $"{record.Date.Month}/{record.Date.Day} の作業記録",
                 rows: new[]
                 {
-                    // 伐採本数はARグラス連携までは記録されない (0は未計測として扱う)
-                    ("伐採本数", record.FelledCount > 0 ? $"{record.FelledCount}本" : "-"),
                     ("間伐率", $"{record.ThinningRatePercent}%"),
                     ("作業面積", $"{record.AreaHa:0.0#}ha"),
                 });

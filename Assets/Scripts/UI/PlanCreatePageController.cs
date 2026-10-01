@@ -275,37 +275,52 @@ public class PlanCreatePageController
 
     void SavePlan()
     {
-        var rangePoints = new List<UnityEngine.Vector2>(_map.EditingPoints);
-
-        if (_editingPlan != null)
+        // 壊れた座標 (NaNなど) の頂点は保存しない
+        var rangePoints = new List<UnityEngine.Vector2>();
+        foreach (var point in _map.EditingPoints)
         {
-            // 編集モード: 既存計画を上書きする
-            _editingPlan.Date = _form.Date;
-            _editingPlan.Species = _form.Species;
-            _editingPlan.ThinningRatePercent = _form.RatePercent;
-            _editingPlan.AreaHa = (float)_areaHa;
-            _editingPlan.FellingIntervalM = _form.IntervalM;
-            _editingPlan.FellingStandardCm = _form.StandardCm;
-            _editingPlan.RangePoints = rangePoints;
-            PlanStore.Update(_editingPlan);
+            if (PlanStore.IsValidLonLat(point)) rangePoints.Add(point);
         }
-        else
+        float areaHa = double.IsNaN(_areaHa) ? 0f : (float)_areaHa;
+
+        try
         {
-            PlanStore.Add(new WorkPlan
+            if (_editingPlan != null)
             {
-                Date = _form.Date,
-                Species = _form.Species,
-                ThinningRatePercent = _form.RatePercent,
-                AreaHa = (float)_areaHa,
-                FellingIntervalM = _form.IntervalM,
-                FellingStandardCm = _form.StandardCm,
-                RangePoints = rangePoints,
-            });
+                // 編集モード: 既存計画を上書きする
+                _editingPlan.Date = _form.Date;
+                _editingPlan.Species = _form.Species;
+                _editingPlan.ThinningRatePercent = _form.RatePercent;
+                _editingPlan.AreaHa = areaHa;
+                _editingPlan.FellingIntervalM = _form.IntervalM;
+                _editingPlan.FellingStandardCm = _form.StandardCm;
+                _editingPlan.RangePoints = rangePoints;
+                PlanStore.Update(_editingPlan);
+            }
+            else
+            {
+                PlanStore.Add(new WorkPlan
+                {
+                    Date = _form.Date,
+                    Species = _form.Species,
+                    ThinningRatePercent = _form.RatePercent,
+                    AreaHa = areaHa,
+                    FellingIntervalM = _form.IntervalM,
+                    FellingStandardCm = _form.StandardCm,
+                    RangePoints = rangePoints,
+                });
+            }
+
+            // 計画範囲の地図タイルを先読みする (山中の圏外でも地図が出るように。_routerは遷移後も生きている)
+            TilePrefetcher.Prefetch(_router, rangePoints);
+        }
+        catch (Exception e)
+        {
+            // 途中で例外が出ても、下の予定ページへの移動まで止めない (止まると保存ボタンが無反応に見える)
+            Debug.LogException(e);
         }
 
-        // 計画範囲の地図タイルを先読みする (山中の圏外でも地図が出るように。_routerは遷移後も生きている)
-        TilePrefetcher.Prefetch(_router, rangePoints);
-
+        // 保存したら必ず予定ページへ戻る
         _router.NavigateToHome();
     }
 }

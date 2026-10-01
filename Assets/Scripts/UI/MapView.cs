@@ -60,10 +60,26 @@ public class MapView : VisualElement
     readonly VisualElement _tileLayer;
     readonly VisualElement _labelTileLayer; // 航空写真の上に重ねる地名タイル
     readonly VisualElement _overlay;
-    readonly Dictionary<string, Image> _tiles = new Dictionary<string, Image>();
+    readonly Dictionary<string, TileSlot> _tiles = new Dictionary<string, TileSlot>();
+
+    /// <summary>画面に置いているタイル1枚ぶんの状態</summary>
+    class TileSlot
+    {
+        public Image Image;
+        public bool IsLabel;      // 地名ラベルの透過タイルか (親タイルでの代用はしない)
+        public BaseLayer Layer;
+        public int Z, X, Y;
+        public string Url, CachePath;
+        public bool HasFinal;     // 本来のタイルを表示済みか (falseなら未取得、または親タイルで代用中)
+        public bool DiskChecked;  // ディスクキャッシュを確認済みか (パンのたびに読み直さないため)
+        public bool NoData;       // サーバーにタイルが無い (404)。再試行しない
+        public int Failures;      // 連続失敗回数 (再試行の間隔を決める)
+        public float RetryAt;     // この時刻まではネットへ取りに行かない (Time.realtimeSinceStartup)
+    }
+
     // デコード済みタイルのメモリキャッシュ。ページを開き直すたびにMapViewは作り直されるため、
     // インスタンス間で共有しないと毎回全タイルを読み直して表示が遅い (特に計画作成ページ)。
-    // LRUで上限を超えた分は破棄する (表示中のタイルは毎回触られるので追い出されない)
+    // LRUで上限を超えた分は破棄する (表示中のタイルはRefreshTilesが毎回TouchCacheするので追い出されない)
     const int TextureCacheCap = 300; // 256px ≒ 200KB/枚 → 上限でも60MB程度
     static readonly Dictionary<string, Texture2D> _textureCache = new Dictionary<string, Texture2D>();
     static readonly LinkedList<string> _textureLru = new LinkedList<string>();
@@ -110,7 +126,24 @@ public class MapView : VisualElement
         }
         return false;
     }
-    readonly HashSet<string> _loading = new HashSet<string>();
+    /// <summary>表示中のタイルをLRUの先頭へ (画面に出ているタイルが追い出されて消えるのを防ぐ)</summary>
+    static void TouchCache(string key)
+    {
+        if (_lruNodes.TryGetValue(key, out var node))
+        {
+            _textureLru.Remove(node);
+            _textureLru.AddFirst(node);
+        }
+    }
+
+    // タイルの取得待ち行列。同時に取りに行く数を絞り、画面から外れた分は取りに行かない
+    const int MaxConcurrentLoads = 8;
+    const int TileTimeoutSec = 15; // 山間部の弱い回線で通信が固まったままにならないよう必ず打ち切る
+    // 失敗したタイルの再試行までの待ち時間 [秒] (回数が増えるほど間隔を空け、最後の値で繰り返す)
+    static readonly float[] RetryDelaysSec = { 2f, 5f, 15f, 30f };
+    readonly HashSet<string> _loading = new HashSet<string>(); // 待ち行列に居る、または通信中のタイル
+    readonly List<string> _loadQueue = new List<string>();
+    int _activeLoads;
 
     // 範囲選択ポリゴン (緯度経度で保持するのでズームしてもずれない)
     readonly List<Vector2> _polygon = new List<Vector2>(); // x=経度, y=緯度
@@ -217,10 +250,18 @@ public class MapView : VisualElement
 
         // 地図を見ている間はタイルの先読みを止める (直列DLでも表示用の取得と回線を取り合うため)
         RegisterCallback<AttachToPanelEvent>(_ => TilePrefetcher.MapVisibleCount++);
-        RegisterCallback<DetachFromPanelEvent>(_ => TilePrefetcher.MapVisibleCount--);
+        RegisterCallback<DetachFromPanelEvent>(_ =>
+        {
+            TilePrefetcher.MapVisibleCount--;
+            // ページを閉じたら、まだ取りに行っていないタイルは諦める (通信中の分は完了してキャッシュに入る)
+            foreach (var key in _loadQueue) _loading.Remove(key);
+            _loadQueue.Clear();
+        });
 
         RegisterCallback<GeometryChangedEvent>(_ =>
         {
+            // レイアウト確定前のSetCenterでは中心の補正ができないので、大きさが決まったここで行う
+            ClampCenter();
             RefreshTiles();
             if (_pendingFit != null)
             {
@@ -241,6 +282,8 @@ public class MapView : VisualElement
         schedule.Execute(() =>
         {
             if (LocationProvider.HasFix) _overlay.MarkDirtyRepaint();
+            // 取れていないタイルを定期的に取り直す (一時的な通信失敗、圏外→圏内の復帰をここで拾う)
+            RetryMissingTiles();
         }).Every(1000);
     }
 
@@ -257,7 +300,12 @@ public class MapView : VisualElement
 
     public void SetCenter(double latitude, double longitude, int zoom)
     {
-        _zoom = Mathf.Clamp(zoom, MinZoom, MaxZoom);
+        if (double.IsNaN(latitude) || double.IsNaN(longitude)) return; // 壊れた座標で地図を壊さない
+
+        // ズームが変わるなら前のズームのタイルは片付ける (同じズームなら使い回す)
+        int newZoom = Mathf.Clamp(zoom, MinZoom, MaxZoom);
+        if (newZoom != _zoom) ClearTileElements();
+        _zoom = newZoom;
         _centerX = LonToWorldX(longitude, _zoom);
         _centerY = LatToWorldY(latitude, _zoom);
         // タイルは破棄しない (RefreshTilesが画面外だけ外し、読み込み済みは使い回す)。
@@ -436,6 +484,7 @@ public class MapView : VisualElement
     {
         using (var request = UnityWebRequestTexture.GetTexture(url))
         {
+            request.timeout = TileTimeoutSec;
             yield return request.SendWebRequest();
             if (request.result == UnityWebRequest.Result.Success)
             {
@@ -886,10 +935,17 @@ public class MapView : VisualElement
         return (p - (a + ab * t)).magnitude;
     }
 
+    /// <summary>地図の上下が世界の端からはみ出さないよう中心を補正する</summary>
     void ClampCenter()
     {
+        // レイアウト確定前は高さがNaN。そのまま計算すると中心YがNaNになり、以後パンやズームをしても
+        // NaNのままで地図が二度と表示されない (ページは地図を画面に貼る前にSetCenterを呼ぶので必ず通る)。
+        // 大きさが決まった時点 (GeometryChangedEvent) で改めて補正するので、ここでは何もしない
+        float height = resolvedStyle.height;
+        if (float.IsNaN(height) || height <= 0f) return;
+
         double worldSize = TileSize * (double)(1 << _zoom);
-        double halfH = resolvedStyle.height / 2.0;
+        double halfH = height / 2.0;
         _centerY = Math.Max(halfH, Math.Min(worldSize - halfH, _centerY));
     }
 
@@ -900,6 +956,9 @@ public class MapView : VisualElement
         _tileLayer.Clear();
         _labelTileLayer.Clear();
         _tiles.Clear();
+        // 前のズーム/レイヤーの取得待ちは不要になったので捨てる (通信中の分は完了してキャッシュに入る)
+        foreach (var key in _loadQueue) _loading.Remove(key);
+        _loadQueue.Clear();
     }
 
     /// <summary>点マーカーを差し替える (選木結果の表示用。x=経度, y=緯度)</summary>
@@ -968,6 +1027,7 @@ public class MapView : VisualElement
         float w = resolvedStyle.width;
         float h = resolvedStyle.height;
         if (w <= 0 || h <= 0 || float.IsNaN(w) || float.IsNaN(h)) return;
+        if (double.IsNaN(_centerX) || double.IsNaN(_centerY)) return; // 念のため (壊れた中心でタイルを並べない)
 
         UpdateScaleBar();
 
@@ -995,19 +1055,17 @@ public class MapView : VisualElement
 
                 string key = TileKey(_layer, _zoom, wrappedX, ty);
                 needed.Add(key);
-                var image = EnsureTileImage(key, TileUrl(_layer, _zoom, wrappedX, ty),
-                    TileCachePath(_layer, _zoom, wrappedX, ty), _tileLayer, placeholder: true);
-                image.style.left = left;
-                image.style.top = top;
+                var slot = EnsureTile(key, false, wrappedX, ty, _tileLayer);
+                slot.Image.style.left = left;
+                slot.Image.style.top = top;
 
                 if (wantLabels)
                 {
-                    string labelKey = $"Labels/{_zoom}/{wrappedX}/{ty}";
+                    string labelKey = LabelKey(_zoom, wrappedX, ty);
                     needed.Add(labelKey);
-                    var labelImage = EnsureTileImage(labelKey, LabelTileUrl(_zoom, wrappedX, ty),
-                        LabelTileCachePath(_zoom, wrappedX, ty), _labelTileLayer, placeholder: false);
-                    labelImage.style.left = left;
-                    labelImage.style.top = top;
+                    var labelSlot = EnsureTile(labelKey, true, wrappedX, ty, _labelTileLayer);
+                    labelSlot.Image.style.left = left;
+                    labelSlot.Image.style.top = top;
                 }
             }
         }
@@ -1020,51 +1078,180 @@ public class MapView : VisualElement
         }
         foreach (var key in toRemove)
         {
-            _tiles[key].RemoveFromHierarchy();
+            _tiles[key].Image.RemoveFromHierarchy();
             _tiles.Remove(key);
         }
+
+        // 画面から外れたタイルは取りに行かない (ズームやパンを続けても不要な通信で回線が詰まらないように)
+        for (int i = _loadQueue.Count - 1; i >= 0; i--)
+        {
+            if (needed.Contains(_loadQueue[i])) continue;
+            _loading.Remove(_loadQueue[i]);
+            _loadQueue.RemoveAt(i);
+        }
+        PumpLoadQueue();
     }
 
-    /// <summary>タイルのImage要素を用意する (メモリ→ディスク→ネットの順で読む)</summary>
-    Image EnsureTileImage(string key, string url, string cachePath, VisualElement parent, bool placeholder)
+    /// <summary>
+    /// タイルの表示枠を用意する。中身は メモリ → ディスク → ネット の順で探し、
+    /// 手元に無い間は保存済みの粗いタイル (親タイル) を引き伸ばして代用する。
+    /// </summary>
+    TileSlot EnsureTile(string key, bool isLabel, int x, int y, VisualElement parent)
     {
-        if (_tiles.TryGetValue(key, out var image)) return image;
-
-        image = new Image { pickingMode = PickingMode.Ignore };
-        image.style.position = Position.Absolute;
-        image.style.width = TileSize;
-        image.style.height = TileSize;
-        if (placeholder)
+        if (!_tiles.TryGetValue(key, out var slot))
         {
-            // 読み込み中の下地色 (透過タイルには付けない)
-            image.style.backgroundColor = new Color(0.9f, 0.9f, 0.88f);
+            var image = new Image { pickingMode = PickingMode.Ignore };
+            image.style.position = Position.Absolute;
+            image.style.width = TileSize;
+            image.style.height = TileSize;
+            if (!isLabel)
+            {
+                // 読み込み中の下地色 (透過のラベルタイルには付けない)
+                image.style.backgroundColor = new Color(0.9f, 0.9f, 0.88f);
+            }
+            slot = new TileSlot
+            {
+                Image = image,
+                IsLabel = isLabel,
+                Layer = _layer,
+                Z = _zoom,
+                X = x,
+                Y = y,
+                Url = isLabel ? LabelTileUrl(_zoom, x, y) : TileUrl(_layer, _zoom, x, y),
+                CachePath = isLabel ? LabelTileCachePath(_zoom, x, y) : TileCachePath(_layer, _zoom, x, y),
+            };
+            _tiles[key] = slot;
+            parent.Add(image);
         }
-        _tiles[key] = image;
-        parent.Add(image);
 
-        if (TryGetCachedTexture(key, out var cached))
+        if (slot.HasFinal) TouchCache(key);
+        else TryFill(key, slot);
+        return slot;
+    }
+
+    /// <summary>まだ本来のタイルが出ていない枠を埋める。無ければ取得待ち行列に入れる (再試行もここを通る)</summary>
+    void TryFill(string key, TileSlot slot)
+    {
+        if (TryGetCachedTexture(key, out var cached) && cached != null)
         {
-            image.image = cached;
+            ShowFinal(slot, cached);
+            return;
         }
-        else
+
+        if (!slot.DiskChecked)
         {
+            slot.DiskChecked = true;
             // ディスクキャッシュ (タイルは数十KBなので同期読みでよい)。圏外でも保存済みなら表示できる
-            var diskTexture = LoadTileFromDisk(cachePath);
+            var diskTexture = LoadTileFromDisk(slot.CachePath);
             if (diskTexture != null)
             {
                 CacheTexture(key, diskTexture);
-                image.image = diskTexture;
+                ShowFinal(slot, diskTexture);
+                return;
             }
-            else if (_runner != null && !_loading.Contains(key))
-            {
-                _loading.Add(key);
-                _runner.StartCoroutine(LoadTile(key, url, cachePath));
-            }
+            // 手元に無い: 届くまでの間 (圏外なら届かないまま) 粗いタイルで代用する
+            if (!slot.IsLabel) ShowAncestor(slot);
         }
-        return image;
+
+        if (slot.NoData || _runner == null || _loading.Contains(key)) return;
+        if (Time.realtimeSinceStartup < slot.RetryAt) return; // 失敗直後は少し待ってから取り直す
+        _loading.Add(key);
+        _loadQueue.Add(key);
+    }
+
+    static void ShowFinal(TileSlot slot, Texture2D texture)
+    {
+        slot.Image.uv = new Rect(0f, 0f, 1f, 1f);
+        slot.Image.image = texture;
+        slot.HasFinal = true;
+        slot.Failures = 0;
+    }
+
+    /// <summary>
+    /// 一段ずつ粗いズームへさかのぼり、保存済みのタイルがあればその一部分を引き伸ばして表示する。
+    /// 日本全域ベース (z5〜10) が保存済みなら、初めて開く山奥の圏外でも灰色一面にならない。
+    /// </summary>
+    void ShowAncestor(TileSlot slot)
+    {
+        for (int k = 1; slot.Z - k >= MinZoom; k++)
+        {
+            int az = slot.Z - k;
+            int ax = slot.X >> k;
+            int ay = slot.Y >> k;
+            string ancestorKey = TileKey(slot.Layer, az, ax, ay);
+            if (!TryGetCachedTexture(ancestorKey, out var texture) || texture == null)
+            {
+                texture = LoadTileFromDisk(TileCachePath(slot.Layer, az, ax, ay));
+                if (texture == null) continue;
+                CacheTexture(ancestorKey, texture);
+            }
+            slot.Image.image = texture;
+            slot.Image.uv = AncestorUv(slot.X, slot.Y, k);
+            return;
+        }
+    }
+
+    /// <summary>k段上の親タイルの中で、タイル(x, y)が占める範囲 (uvは左下原点、タイルYは北が0で南向き)</summary>
+    static Rect AncestorUv(int x, int y, int k)
+    {
+        int n = 1 << k;
+        float size = 1f / n;
+        int column = x - ((x >> k) << k);
+        int row = y - ((y >> k) << k); // 親タイルの上から何番目か
+        return new Rect(column * size, 1f - (row + 1) * size, size, size);
+    }
+
+    /// <summary>取れていないタイルの取り直し (1秒ごと。待ち時間を過ぎた分だけが行列に入る)</summary>
+    void RetryMissingTiles()
+    {
+        if (panel == null) return;
+        bool any = false;
+        foreach (var pair in _tiles)
+        {
+            var slot = pair.Value;
+            if (slot.HasFinal || slot.NoData) continue;
+            TryFill(pair.Key, slot);
+            any = true;
+        }
+        if (any) PumpLoadQueue();
+    }
+
+    /// <summary>空きがあるぶんだけ取得を開始する。画面の中心に近いタイルから取りに行く</summary>
+    void PumpLoadQueue()
+    {
+        if (_runner == null) return;
+        while (_activeLoads < MaxConcurrentLoads && _loadQueue.Count > 0)
+        {
+            int best = 0;
+            double bestDistance = double.MaxValue;
+            for (int i = 0; i < _loadQueue.Count; i++)
+            {
+                if (!_tiles.TryGetValue(_loadQueue[i], out var candidate)) continue;
+                double dx = (candidate.X + 0.5) * TileSize - _centerX;
+                double dy = (candidate.Y + 0.5) * TileSize - _centerY;
+                double distance = dx * dx + dy * dy;
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    best = i;
+                }
+            }
+
+            string key = _loadQueue[best];
+            _loadQueue.RemoveAt(best);
+            if (!_tiles.TryGetValue(key, out var slot))
+            {
+                _loading.Remove(key); // もう画面に無い
+                continue;
+            }
+            _activeLoads++;
+            _runner.StartCoroutine(LoadTile(key, slot.Url, slot.CachePath));
+        }
     }
 
     static string TileKey(BaseLayer layer, int z, int x, int y) => $"{layer}/{z}/{x}/{y}";
+
+    static string LabelKey(int z, int x, int y) => $"Labels/{z}/{x}/{y}";
 
     /// <summary>ベースタイルのURL (TilePrefetcherの先読みと共用)</summary>
     public static string TileUrl(BaseLayer layer, int z, int x, int y)
@@ -1133,22 +1320,47 @@ public class MapView : VisualElement
 
     IEnumerator LoadTile(string key, string url, string cachePath)
     {
+        bool loaded = false;
+        bool noData = false;
         using (var request = UnityWebRequestTexture.GetTexture(url))
         {
+            request.timeout = TileTimeoutSec;
             yield return request.SendWebRequest();
-            _loading.Remove(key);
 
             if (request.result == UnityWebRequest.Result.Success)
             {
                 var texture = DownloadHandlerTexture.GetContent(request);
-                CacheTexture(key, texture);
-                if (_tiles.TryGetValue(key, out var image))
+                if (texture != null)
                 {
-                    image.image = texture;
+                    loaded = true;
+                    CacheTexture(key, texture);
+                    if (_tiles.TryGetValue(key, out var shown)) ShowFinal(shown, texture);
+                    SaveTileToDisk(cachePath, request.downloadHandler.data);
                 }
-                SaveTileToDisk(cachePath, request.downloadHandler.data);
+            }
+            else if (request.result == UnityWebRequest.Result.ProtocolError && request.responseCode == 404)
+            {
+                noData = true; // 海上や整備範囲外などタイル自体が無い場所。取り直しても出ない
             }
         }
+
+        _activeLoads--;
+        _loading.Remove(key);
+        if (!loaded && _tiles.TryGetValue(key, out var slot))
+        {
+            if (noData)
+            {
+                slot.NoData = true;
+            }
+            else
+            {
+                // 通信失敗・タイムアウト: 間隔を空けて取り直す (RetryMissingTilesが拾う)
+                int step = Mathf.Min(slot.Failures, RetryDelaysSec.Length - 1);
+                slot.RetryAt = Time.realtimeSinceStartup + RetryDelaysSec[step];
+                slot.Failures++;
+            }
+        }
+        PumpLoadQueue();
     }
 
     // ---- 範囲ポリゴンの描画 ----
