@@ -118,14 +118,21 @@ namespace CanbatsuMS
                 // 曲がり分類 (幹の箱を切り出して判定。細すぎる箱は-1=未判定)
                 float bent = BendClassifier != null ? BendClassifier.Classify(kf, b) : -1f;
 
+                // メジャー実測5本との突き合わせ(2026-10-05)より:
+                //   画面上25px以上の幹 = エッジ実測で誤差+6〜7%(ほぼ物差しの限界)
+                //   16px未満の細い幹 = 平滑化幅(±2px)と同オーダーで原理的に測れず、
+                //   旧フォールバック(箱幅×0.7)は+123%の大外れを出した
+                // → 信頼できるとき(エッジ成功かつ16px以上)だけ径を出し、それ以外は0=非表示
                 float wpx = TrunkDetectorML.RefineWidthPx(kf, b);
-                if (wpx <= 0) wpx = (b.U1 - b.U0) * 0.7f;
+                float widthMeters = wpx >= 16f
+                    ? Mathf.Clamp(wpx / kf.Fx * md, 0.08f, 0.8f)
+                    : 0f; // 細すぎ/測定失敗 → 誤った数字を表示しない
                 var tree = new MsTree
                 {
                     X = mx, Z = mz,
                     GroundY = groundY,
                     PointCount = cluster.Count,
-                    WidthMeters = Mathf.Clamp(wpx / kf.Fx * md, 0.08f, 0.8f),
+                    WidthMeters = widthMeters,
                     YExtent = (b.V1 - b.V0) / kf.Fy * md,
                     BentScore = bent,
                 };
