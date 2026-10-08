@@ -83,6 +83,13 @@ public class PlanCaptureService : MonoBehaviour
     {
         try
         {
+            // 数値でない値を書くとサーバー側で読めないファイルになるので書かない
+            if (float.IsNaN(anchorPos.x) || float.IsNaN(anchorPos.y) || float.IsNaN(anchorPos.z)
+                || float.IsNaN(anchorYawRad) || float.IsInfinity(anchorYawRad))
+            {
+                Debug.LogWarning("基準点の値が不正なため anchor.json を書きませんでした");
+                return;
+            }
             string json = FormattableString.Invariant(
                 $"{{\"pos\":[{anchorPos.x:F5},{anchorPos.y:F5},{anchorPos.z:F5}],\"yawRad\":{anchorYawRad:F6}}}");
             File.WriteAllText(Path.Combine(SessionDir, "anchor.json"), json);

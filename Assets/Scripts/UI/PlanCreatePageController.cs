@@ -76,7 +76,7 @@ public class PlanCreatePageController
             Debug.Log($"GPX区画なし (置き場所: {GpxImporter.FolderPath})");
         }
 
-        // 初期表示: Fix済みなら現在地 > 区画 (GPX) があればそこ > 吉野の山地 (吉野杉で有名)
+        // 初期表示: Fix済みなら現在地 > 区画 (GPX) があればそこ > 既定位置 (MapView.DefaultLatitude/Longitude)
         if (LocationProvider.HasFix)
         {
             _map.SetCenter(LocationProvider.Latitude, LocationProvider.Longitude, 15);
@@ -90,7 +90,7 @@ public class PlanCreatePageController
         }
         else
         {
-            _map.SetCenter(34.3766, 135.9058, 15);
+            _map.SetCenter(MapView.DefaultLatitude, MapView.DefaultLongitude, 15);
         }
         page.Q<VisualElement>("map-container").Add(_map);
 

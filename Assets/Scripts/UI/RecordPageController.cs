@@ -59,7 +59,7 @@ public class RecordPageController
         }
         else
         {
-            _map.SetCenter(34.3766, 135.9058, 14);
+            _map.SetCenter(MapView.DefaultLatitude, MapView.DefaultLongitude, 14);
         }
         page.Q<VisualElement>("map-container").Add(_map);
         _map.DisplayPolygonClicked += OnPolygonClicked;

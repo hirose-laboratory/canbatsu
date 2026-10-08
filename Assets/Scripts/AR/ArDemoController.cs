@@ -1018,6 +1018,13 @@ public class ArDemoController : MonoBehaviour
         var cam = _arCamera.transform;
         var forward = cam.forward;
         forward.y = 0f; // yawだけ使う (上下の傾きは基準にしない)
+        // トラッキングが外れていると位置や向きが NaN になることがある (NaN は < 比較を素通りするので先に弾く)
+        if (float.IsNaN(forward.x) || float.IsNaN(forward.z)
+            || float.IsNaN(cam.position.x) || float.IsNaN(cam.position.y) || float.IsNaN(cam.position.z))
+        {
+            ShowFeedback("位置を見失っています。少し動いてからもう一度基準点をセットしてください");
+            return false;
+        }
         if (forward.sqrMagnitude < 1e-6f)
         {
             ShowFeedback("真上/真下を向いたままでは基準点にできません");

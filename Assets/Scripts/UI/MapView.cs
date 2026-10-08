@@ -37,6 +37,10 @@ public class MapView : VisualElement
         public object UserData;
     }
 
+    /// <summary>現在地が取れないときの初期表示位置 (三重県の対象地域。2026-10-08ユーザー指定「だいたいこの辺り」)</summary>
+    public const double DefaultLatitude = 34.5775145;
+    public const double DefaultLongitude = 136.3997631;
+
     const int TileSize = 256;
     const int MinZoom = 5;
     // 最大ズームは18 (選木結果の確認は紙地図でいう1/2500相当まで寄りたい、という現場の要望。
