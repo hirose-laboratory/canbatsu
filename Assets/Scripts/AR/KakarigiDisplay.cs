@@ -3,10 +3,12 @@ using HangUpTree.Core;
 using UnityEngine;
 
 /// <summary>
-/// かかり木の危険予知 (試作)。3点を順にマークして危険域を出す:
-///  1. かかり木: 根元 (元口) を見て「かかり木」 → 根元に印
-///  2. 支持木: 寄りかかっている相手の木の根元を見て「支持木」 → 根元に印 (近くに検出木があれば呼び出し側で吸着)
-///  3. 接点: かかり木が支持木に触れている所を見て「接点」 → 接点を3Dで求めて危険域を描く
+/// かかり木の危険予知 (試作)。「かかり木」でモードに入り、照準を合わせて3点を順に決定する:
+///  0. 「かかり木」 → かかり木モードに入る (この時点では何も置かない。照準が出る)
+///  1. かかり木の根元 (元口) に照準を合わせてもう一度「かかり木」 → 根元に印
+///  2. 支持木 (寄りかかっている相手の木) の根元に照準を合わせて「支持木」 → 根元に印 (近くに検出木があれば呼び出し側で吸着)
+///  3. かかり木が支持木に触れている所に照準を合わせて「接点」 → 接点を3Dで求めて危険域を描く
+///  根元の決定後に「かかり木」と言えば最初からやり直し。「かいじょ」でモードを抜ける
 ///
 /// 計算はAR担当の最新版 (HangUpTree 0831) の Core をそのまま使う (Assets/HangUpTreeCore):
 ///  - 接点は「接点への視線」と「支持木の鉛直な幹軸」の最近接点 (手法A)。
@@ -17,7 +19,14 @@ using UnityEngine;
 /// </summary>
 public class KakarigiDisplay
 {
-    public enum State { Idle, TargetMarked, SupportMarked, Shown }
+    /// <summary>
+    /// Idle=モード外 / AimTarget=根元を狙っている / AimSupport=支持木の根元を狙っている /
+    /// AimContact=接点を狙っている / Shown=危険域を表示中
+    /// </summary>
+    public enum State { Idle, AimTarget, AimSupport, AimContact, Shown }
+
+    /// <summary>照準を出す段階か (3点のどれかを狙っている間)</summary>
+    public bool IsAiming => Current == State.AimTarget || Current == State.AimSupport || Current == State.AimContact;
 
     /// <summary>危険域のパラメータ (0831版の既定値のまま = すべて暫定値)</summary>
     readonly DangerZoneSettings _settings = new DangerZoneSettings();
@@ -32,8 +41,9 @@ public class KakarigiDisplay
     /// <summary>HUD用: 手順中は次の操作の案内、表示中は結果の要約</summary>
     public string Summary { get; private set; } = "";
 
-    public const string NavSupport = "支持木 (寄りかかっている相手の木) の根元を見て「支持木」";
-    public const string NavContact = "かかり木が支持木に触れている所を見て「接点」";
+    public const string NavTarget = "かかり木の根元 (地面との境目) に照準を合わせて、もう一度「かかり木」";
+    public const string NavSupport = "支持木 (寄りかかっている相手の木) の根元に照準を合わせて「支持木」";
+    public const string NavContact = "かかり木が支持木に触れている所に照準を合わせて「接点」";
 
     // ---- 観測 ----
     Vector3 _butt;               // かかり木の根元 (地面上)
@@ -44,6 +54,7 @@ public class KakarigiDisplay
 
     // ---- 表示 ----
     GameObject _root;            // この機能の表示すべての親 (解除で一括破棄)
+    GameObject _targetRoot;      // かかり木の根元の印
     GameObject _supportRoot;     // 支持木の印 (置き直しで作り直す)
     GameObject _zoneRoot;        // 接点と危険域 (確定し直すたびに作り直す)
     readonly List<Transform> _labels = new List<Transform>();
@@ -57,22 +68,42 @@ public class KakarigiDisplay
     static readonly Color ContactColor = new Color(1f, 0.85f, 0.25f);   // 接点
 
     // ======================================================================
-    // 1. かかり木
+    // 0. モードに入る
     // ======================================================================
 
     /// <summary>
-    /// かかり木の根元を見ている視線からマークを始める。戻り値=マークできたか (結果の文言はmessage)。
+    /// かかり木モードに入る (何も置かず、根元を狙う段階にする)。すでにモード中なら最初からやり直す。
     /// </summary>
     /// <param name="parent">表示の親 (WorkContent。作業終了で一括破棄される)</param>
-    /// <param name="gaze">根元を見ている視線 (カメラ位置+向き)</param>
-    /// <param name="ground">根元まわりの地面平面</param>
-    public bool MarkTarget(Transform parent, Ray gaze, Plane ground, out string message)
+    public void Begin(Transform parent)
     {
         Clear();
+        _root = new GameObject("Kakarigi");
+        _root.transform.SetParent(parent, false);
+        Current = State.AimTarget;
+        Summary = NavTarget;
+    }
+
+    // ======================================================================
+    // 1. かかり木の根元
+    // ======================================================================
+
+    /// <summary>
+    /// 照準 (視線) の先をかかり木の根元として決定する。戻り値=決定できたか (結果の文言はmessage)。
+    /// </summary>
+    /// <param name="gaze">根元を見ている視線 (カメラ位置+向き)</param>
+    /// <param name="ground">根元まわりの地面平面</param>
+    public bool MarkTarget(Ray gaze, Plane ground, out string message)
+    {
+        if (Current != State.AimTarget)
+        {
+            message = "先に「かかり木」でかかり木モードに入ってください";
+            return false;
+        }
         if (!HangUpSolver.TryResolveOnGround(gaze, ground, out Vector3 butt)
             || Vector3.Distance(gaze.origin, butt) > MaxMarkDistance)
         {
-            message = "かかり木の根元 (地面との境目) を見てください";
+            message = "かかり木の根元 (地面との境目) に照準を合わせてください";
             return false;
         }
 
@@ -80,13 +111,13 @@ public class KakarigiDisplay
         _ground = ground;
         _frame = GroundFrame.FromPlane(ground, butt);
 
-        _root = new GameObject("Kakarigi");
-        _root.transform.SetParent(parent, false);
-        AddPillar(_root.transform, butt, TargetColor, 0.5f, "かかり木");
+        _targetRoot = new GameObject("KakarigiTarget");
+        _targetRoot.transform.SetParent(_root.transform, false);
+        AddPillar(_targetRoot.transform, butt, TargetColor, 0.5f, "かかり木");
 
-        Current = State.TargetMarked;
+        Current = State.AimSupport;
         Summary = NavSupport;
-        message = "かかり木をマークしました";
+        message = "かかり木の根元を決定しました";
         return true;
     }
 
@@ -103,12 +134,14 @@ public class KakarigiDisplay
     // 2. 支持木
     // ======================================================================
 
-    /// <summary>支持木の根元をマークする。表示中に呼べば置き直し (接点と危険域は消える)</summary>
+    /// <summary>支持木の根元を決定する。接点の決定後や表示中に呼べば置き直し (接点と危険域は消える)</summary>
     public bool MarkSupport(Vector3 supportBase, out string message)
     {
-        if (Current == State.Idle)
+        if (Current == State.Idle || Current == State.AimTarget)
         {
-            message = "先に「かかり木」で根元をマークしてください";
+            message = Current == State.Idle
+                ? "先に「かかり木」でかかり木モードに入ってください"
+                : "先にかかり木の根元に照準を合わせて「かかり木」で決定してください";
             return false;
         }
         Vector3 flat = supportBase - _butt;
@@ -116,15 +149,16 @@ public class KakarigiDisplay
         float d = flat.magnitude;
         if (d < MinSupportDistance)
         {
-            message = "かかり木と同じ所です。寄りかかっている相手の木の根元を見てください";
+            message = "かかり木と同じ所です。寄りかかっている相手の木の根元に照準を合わせてください";
             return false;
         }
         if (d > MaxSupportDistance)
         {
-            message = $"支持木が遠すぎます ({d:0}m)。寄りかかっている相手の木の根元を見てください";
+            message = $"支持木が遠すぎます ({d:0}m)。寄りかかっている相手の木の根元に照準を合わせてください";
             return false;
         }
 
+        // 置き直し: 前の支持木と、それに基づく接点・危険域は消す
         DestroyGroup(ref _zoneRoot);
         DestroyGroup(ref _supportRoot);
         Zone = null;
@@ -135,9 +169,9 @@ public class KakarigiDisplay
         _supportRoot.transform.SetParent(_root.transform, false);
         AddPillar(_supportRoot.transform, supportBase, SupportColor, 2.5f, "支持木");
 
-        Current = State.SupportMarked;
+        Current = State.AimContact;
         Summary = NavContact;
-        message = $"支持木をマークしました (かかり木から{d:0.0}m)";
+        message = $"支持木の根元を決定しました (かかり木から{d:0.0}m)";
         return true;
     }
 
@@ -151,11 +185,11 @@ public class KakarigiDisplay
     /// </summary>
     public bool MarkContact(Ray gaze, out string message)
     {
-        if (Current == State.Idle || Current == State.TargetMarked)
+        if (Current != State.AimContact && Current != State.Shown)
         {
-            message = Current == State.Idle
-                ? "先に「かかり木」で根元をマークしてください"
-                : "先に「支持木」の根元をマークしてください";
+            message = Current == State.Idle ? "先に「かかり木」でかかり木モードに入ってください"
+                : Current == State.AimTarget ? "先にかかり木の根元に照準を合わせて「かかり木」で決定してください"
+                : "先に支持木の根元に照準を合わせて「支持木」で決定してください";
             return false;
         }
 
@@ -233,7 +267,7 @@ public class KakarigiDisplay
                   (floored ? "(下限)" : "") + $"・半径{radius:0}m ({methodText}・暫定値)";
         message = method == TopResolveMethod.Triangulation
             ? "2視点で接点を確定 (精度高)"
-            : "危険域を表示。1m以上横に動いて接点をもう一度「接点」で精度アップ";
+            : "危険域を表示。1m以上横に動いてもう一度「接点」で精度アップ";
         return true;
     }
 
@@ -241,6 +275,7 @@ public class KakarigiDisplay
     {
         if (_root != null) Object.Destroy(_root);
         _root = null;
+        _targetRoot = null;
         _supportRoot = null;
         _zoneRoot = null;
         _labels.Clear();

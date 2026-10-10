@@ -88,20 +88,21 @@ public class WorkingPageController
         AddRow(summary, "しきい値 (伐採間隔)", $"{plan.FellingIntervalM:0.0}m");
         AddRow(summary, "対象面積", $"{plan.AreaHa:0.0#}ha");
 
-        // ARグラス操作の代替ボタン (音声「きじゅん」「マーク」「かかりぎ」が使えないときの手元操作。結果はグラスのHUDに出る)
+        // ARグラス操作の代替ボタン (音声「きじゅん」「マーク」「かかり」が使えないときの手元操作。結果はグラスのHUDに出る)
         page.Q<Button>("anchor-button").clicked += () => ArDemoController.SetAnchorHere();
         page.Q<Button>("mark-button").clicked += () => ArDemoController.MarkTreeAtGaze();
-        // かかり木は段階に合わせて1つのボタンで進める (3点を順にマーク):
-        //   「かかり木」(根元) → 「支持木」(相手の木の根元) → 「接点」(触れている所→計算) → 「かかり木解除」
+        // かかり木は段階に合わせて1つのボタンで進める (文言は従来どおり):
+        //   「かかり木」(モードに入る→照準) → 「かかり木」(根元を決定) → 「支持木」→「接点」(→危険域) → 「かかり木解除」
         // 途中でやめたいときは音声「かいじょ」
         var kakarigiButton = page.Q<Button>("kakarigi-button");
         kakarigiButton.clicked += () =>
         {
             switch (ArDemoController.KakarigiState)
             {
-                case KakarigiDisplay.State.Idle: ArDemoController.MarkKakarigiAtGaze(); break;
-                case KakarigiDisplay.State.TargetMarked: ArDemoController.MarkSupportAtGaze(); break;
-                case KakarigiDisplay.State.SupportMarked: ArDemoController.MarkContactAtGaze(); break;
+                case KakarigiDisplay.State.Idle:
+                case KakarigiDisplay.State.AimTarget: ArDemoController.MarkKakarigiAtGaze(); break;
+                case KakarigiDisplay.State.AimSupport: ArDemoController.MarkSupportAtGaze(); break;
+                case KakarigiDisplay.State.AimContact: ArDemoController.MarkContactAtGaze(); break;
                 default: ArDemoController.ClearKakarigi(); break;
             }
         };
@@ -109,9 +110,10 @@ public class WorkingPageController
         {
             switch (ArDemoController.KakarigiState)
             {
-                case KakarigiDisplay.State.Idle: kakarigiButton.text = "かかり木"; break;
-                case KakarigiDisplay.State.TargetMarked: kakarigiButton.text = "支持木"; break;
-                case KakarigiDisplay.State.SupportMarked: kakarigiButton.text = "接点"; break;
+                case KakarigiDisplay.State.Idle:
+                case KakarigiDisplay.State.AimTarget: kakarigiButton.text = "かかり木"; break;
+                case KakarigiDisplay.State.AimSupport: kakarigiButton.text = "支持木"; break;
+                case KakarigiDisplay.State.AimContact: kakarigiButton.text = "接点"; break;
                 default: kakarigiButton.text = "かかり木解除"; break;
             }
         }).Every(300);
